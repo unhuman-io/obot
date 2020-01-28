@@ -1,0 +1,9 @@
+[Unit]
+Description=Jetbot camera display
+
+[Service]
+Type=oneshot
+ExecStart=jetbot_camera_display.sh
+
+[Install]
+WantedBy=multi-user.target
