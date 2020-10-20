@@ -5,11 +5,11 @@ system_installs=(
 )
 
 installs=(
-    https://github.com/unhuman-io/realtime-tmp/releases/download/0.4.0/realtime-tmp-0.4.0-Linux.deb
+    https://github.com/unhuman-io/realtime-tmp/releases/download/develop/realtime-tmp.deb
 )
 
 local_installs=(
-     https://github.com/unhuman-io/realtime-tmp/releases/download/0.4.0/artifacts-0.4.0.tgz
+     https://github.com/unhuman-io/realtime-tmp/releases/download/develop/artifacts.tgz
 )
 
 sudo apt install -y dkms libudev1 dfu-util wget
@@ -21,18 +21,17 @@ for install in ${system_installs[@]}; do
     sudo dpkg -i $(basename $install)
 done
 
-if [ $2 == "--local" ]; then
-    for install in ${installs[@]}; do
-        wget $install
-        sudo dpkg -i $(basename $install)
-    done
-else 
+if [ $1 == "--local" ]; then
     for install in ${local_installs[@]}; do
         wget $install
         tar xzf $(basename $install) -C ../
     done
+else 
+    for install in ${installs[@]}; do
+        wget $install
+        sudo dpkg -i $(basename $install)
+    done
 fi
-
 
 cd ..
 rm -r freebot-tmp
