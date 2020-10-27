@@ -43,10 +43,11 @@ cd module_headers
 tar -xjf ../Linux_for_Tegra/source/public/kernel_src.tbz2
 cd kernel/kernel-4.9
 cp $HOME/jetson_nano/kernel/kernel-4.9/${TEGRA_KERNEL_OUT}/.config .
+cp $HOME/jetson_nano/kernel/kernel-4.9/${TEGRA_KERNEL_OUT}/Module.symvers .
 ./scripts/rt-patch.sh apply-patches
 make ARCH=arm64 modules_prepare
 kernel_ver=$(cat include/config/kernel.release)
-sudo cp -r kernel $HOME/jetson_nano/Linux_for_Tegra/rootfs/usr/src/linux-headers-${kernel_ver}
+sudo cp -r .. $HOME/jetson_nano/Linux_for_Tegra/rootfs/usr/src/linux-headers-${kernel_ver}
 cd $HOME/jetson_nano/Linux_for_Tegra/rootfs/lib/modules/${kernel_ver}
 sudo rm build
 sudo ln -s /usr/src/linux-headers-${kernel_ver}/kernel-4.9 build
