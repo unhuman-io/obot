@@ -1,7 +1,7 @@
 #!/bin/bash
 
 system_installs=(
-    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.0/usb_rt_driver-0.6.0-Linux.deb 
+    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.1/usb_rt_driver-0.6.1-Linux.deb 
 )
 
 installs=(
