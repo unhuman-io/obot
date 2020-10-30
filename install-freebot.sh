@@ -41,4 +41,4 @@ else
 fi
 
 popd
-rm -r $tmp_dir
+rm -rf $tmp_dir

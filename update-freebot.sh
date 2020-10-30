@@ -9,4 +9,4 @@ chmod +x install_freebot.sh
 sudo ./install_freebot.sh
 
 popd
-rm -r $tmp_dir
+rm -rf $tmp_dir
