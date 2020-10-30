@@ -1,5 +1,7 @@
 #!/bin/bash
 
+tmp_dir=$(mktemp -d -t freebot)
+
 system_installs=(
     https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.1/usb_rt_driver-0.6.1-Linux.deb 
 )
@@ -13,8 +15,10 @@ local_installs=(
 )
 
 sudo apt install -y dkms libudev1 dfu-util wget
-mkdir -p freebot-tmp
-cd freebot-tmp
+sudo cp $0 /usr/local/bin/install-freebot.sh
+
+mkdir -p $tmp_dir
+pushd $tmp_dir
 
 for install in ${system_installs[@]}; do
     wget $install
@@ -33,5 +37,5 @@ else
     done
 fi
 
-cd ..
-rm -r freebot-tmp
+popd
+rm -r $tmp_dir
