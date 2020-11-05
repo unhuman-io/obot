@@ -19,7 +19,7 @@ sudo apt install -y dkms libudev1 dfu-util wget
 mkdir -p $tmp_dir
 pushd $tmp_dir
 
-curl https://raw.githubusercontent.com/unhuman-io/freebot/master/update-freebot.sh > update-freebot.sh
+curl https://raw.githubusercontent.com/unhuman-io/freebot/main/update-freebot.sh > update-freebot.sh
 chmod +x update-freebot.sh
 sudo cp update-freebot.sh /usr/local/bin/update-freebot
 

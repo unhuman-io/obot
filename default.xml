@@ -1,6 +1,6 @@
 <manifest>
   <remote fetch="." name="origin"/>
-  <default remote="origin" revision="master"/>
+  <default remote="origin" revision="main"/>
 
   <project name="freebot-controller.git" path="freebot-controller"/>
   <project name="realtime-tmp.git" path="realtime-tmp"/>
