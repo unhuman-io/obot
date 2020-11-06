@@ -1,13 +1,14 @@
 #!/bin/bash
 
 tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
+arch=$(uname -m)
 
 system_installs=(
-    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.1/usb_rt_driver-0.6.1-Linux.deb 
+    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.1/usb_rt_driver-0.6.1-${arch}.deb 
 )
 
 installs=(
-    https://github.com/unhuman-io/realtime-tmp/releases/download/develop/realtime-tmp.deb
+    https://github.com/unhuman-io/realtime-tmp/releases/download/develop/realtime-tmp-${arch}.deb
 )
 
 local_installs=(

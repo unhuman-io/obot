@@ -2,6 +2,7 @@
   <remote fetch="." name="origin"/>
   <default remote="origin" revision="main"/>
 
+  <project name="freebot.git" path="freebot"/>
   <project name="freebot-controller.git" path="freebot-controller"/>
   <project name="realtime-tmp.git" path="realtime-tmp"/>
   <project name="usb_rt_driver.git" path="usb-rt-driver"/>
