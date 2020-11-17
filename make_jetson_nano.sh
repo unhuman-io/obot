@@ -3,20 +3,28 @@
 version=R32.4.4
 
 sudo apt-get update 
-sudo apt-get install libncurses5-dev 
-sudo apt-get install build-essential bc 
-sudo apt-get install lbzip2
-sudo apt-get install qemu-user-static
+sudo apt-get install -y libncurses5-dev 
+sudo apt-get install -y build-essential bc 
+sudo apt-get install -y lbzip2
+sudo apt-get install -y qemu-user-static
 
 # Create build folder
-mkdir $HOME/jetson_nano 
+# manually download from here:
+# https://developer.nvidia.com/embedded/downloads
+# L4T sample filesystem
+# L4T Jetson driver package
+# L4T Sources Jetson
+# 
+# https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
+
+#mkdir $HOME/jetson_nano 
 cd $HOME/jetson_nano 
 
 sudo tar xpf Tegra210_Linux_${version}_aarch64.tbz2 
 cd Linux_for_Tegra/rootfs/ 
 sudo tar xpf ../../Tegra_Linux_Sample-Root-Filesystem_${version}_aarch64.tbz2 
 cd ../../ 
-#tar -xvf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
+tar -xvf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 sudo tar -xjf public_sources.tbz2
 tar -xjf Linux_for_Tegra/source/public/kernel_src.tbz2
 
@@ -66,4 +74,5 @@ sudo ./apply_binaries.sh
 
 # Generate Jetson Nano image
 cd tools
-sudo ./jetson-disk-image-creator.sh -o jetson_nano.img -b jetson-nano-2gb-devkit
+sudo ./jetson-disk-image-creator.sh -o jetson_nano_2gb.img -b jetson-nano-2gb-devkit
+sudo ./jetson-disk-image-creator.sh -o jetson_nano_4gb.img -b jetson-nano -r 300
