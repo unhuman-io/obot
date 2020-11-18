@@ -6,7 +6,7 @@ sudo apt-get update
 sudo apt-get install -y libncurses5-dev 
 sudo apt-get install -y build-essential bc 
 sudo apt-get install -y lbzip2
-sudo apt-get install -y qemu-user-static
+sudo apt-get install -y qemu-user-static systemd-container
 
 # Create build folder
 # manually download from here:
@@ -72,6 +72,23 @@ sudo mv kernel_headers.tbz2  ../kernel/
 # Apply binaries
 cd .. 
 sudo ./apply_binaries.sh
+
+cd $HOME/jetson_nano/Linux_for_Tegra
+# Add freebot stuff
+cd rootfs
+sudo cp /usr/bin/qemu-aarch64-static usr/bin
+sudo cp -L /etc/resolv.conf etc/
+sudo systemd-nspawn -D . -M tmpjetson --resolv-conf off --pipe /bin/bash << EOF
+apt update
+apt install -y curl
+curl https://raw.githubusercontent.com/unhuman-io/freebot/main/install-freebot.sh > install-freebot.sh
+chmod +x install-freebot.sh
+./install-freebot.sh
+EOF
+sudo rm usr/bin/qemu-aarch64-static
+#sudo mv etc/resolv.conf.tmp etc/resolv.conf
+sudo rm etc/resolv.conf
+cd ..
 
 # Generate Jetson Nano image
 cd tools
