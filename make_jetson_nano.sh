@@ -11,9 +11,9 @@ sudo apt-get install -y qemu-user-static
 # Create build folder
 # manually download from here:
 # https://developer.nvidia.com/embedded/downloads
-# L4T sample filesystem
-# L4T Jetson driver package
-# L4T Sources Jetson
+# L4T sample filesystem https://developer.nvidia.com/embedded/L4T/r32_Release_v4.4/r32_Release_v4.4-GMC3/T210/Tegra_Linux_Sample-Root-Filesystem_R32.4.4_aarch64.tbz2
+# L4T Jetson driver package https://developer.nvidia.com/embedded/L4T/r32_Release_v4.4/r32_Release_v4.4-GMC3/T210/Tegra210_Linux_R32.4.4_aarch64.tbz2
+# L4T Sources Jetson https://developer.nvidia.com/embedded/L4T/r32_Release_v4.4/r32_Release_v4.4-GMC3/Sources/T210/public_sources.tbz2
 # 
 # https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 
@@ -30,13 +30,14 @@ tar -xjf Linux_for_Tegra/source/public/kernel_src.tbz2
 
 cd kernel/kernel-4.9/ 
 ./scripts/rt-patch.sh apply-patches 
+#some sort of bug
+sed -i 's/YYLTYPE yylloc;//' scripts/dtc/dtc-lexer.lex.c_shipped
 
 # Compile kernel
 TEGRA_KERNEL_OUT=jetson_nano_kernel 
 mkdir $TEGRA_KERNEL_OUT 
 export CROSS_COMPILE=$HOME/jetson_nano/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
 make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig 
-
 make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j10
 
 # Copy results
