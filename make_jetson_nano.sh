@@ -81,6 +81,8 @@ sudo cp -L /etc/resolv.conf etc/
 sudo systemd-nspawn -D . -M tmpjetson --resolv-conf off --pipe /bin/bash << EOF
 apt update
 apt install -y curl
+cd /usr/src/linux-headers-${kernel_ver}/kernel-4.9
+make scripts -j10   # fix scripts that were not compiled correctly
 curl https://raw.githubusercontent.com/unhuman-io/freebot/main/install-freebot.sh > install-freebot.sh
 chmod +x install-freebot.sh
 ./install-freebot.sh
@@ -94,3 +96,12 @@ cd ..
 cd tools
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_2gb.img -b jetson-nano-2gb-devkit
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_4gb.img -b jetson-nano -r 300
+
+## additional notes after startup
+# I've used the usb serial interface to connect with the device rather than graphical
+# sudo screen /dev/ttyACM0
+# During the setup I configured with dummy network since the wifi doesn't seem to work at first
+# both for the intel ac8265 and the usb wifi included with the 2gb version
+# It fails configuration then select do not configure at this time
+# Then after reboot I do sudo nmtui to configure a wifi connection
+# also I switch to text only with sudo systemctl set-default multi-user.target
