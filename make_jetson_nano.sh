@@ -105,3 +105,4 @@ sudo ./jetson-disk-image-creator.sh -o jetson_nano_4gb.img -b jetson-nano -r 300
 # It fails configuration then select do not configure at this time
 # Then after reboot I do sudo nmtui to configure a wifi connection
 # also I switch to text only with sudo systemctl set-default multi-user.target
+# For the ac8265 I found that sudo iwconfig wlan0 power off
