@@ -22,7 +22,7 @@ pushd $tmp_dir
 
 curl https://raw.githubusercontent.com/unhuman-io/freebot/main/update-freebot.sh > update-freebot.sh
 chmod +x update-freebot.sh
-sudo cp update-freebot.sh /usr/local/bin/update-freebot
+sudo cp update-freebot.sh /usr/bin/update-freebot
 
 for install in ${system_installs[@]}; do
     wget $install
