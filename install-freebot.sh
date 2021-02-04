@@ -4,7 +4,7 @@ tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
 arch=$(uname -m)
 
 system_installs=(
-    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.1/usb_rt_driver-0.6.2-${arch}.deb 
+    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.2/usb_rt_driver-0.6.2-${arch}.deb 
 )
 
 installs=(
