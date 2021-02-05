@@ -2,9 +2,9 @@
   <remote fetch="." name="origin"/>
   <default remote="origin" revision="main" sync-s="true"/>
 
-  <project name="freebot.git"/>
-  <project name="freebot-controller.git"/>
-  <project name="realtime-tmp.git"/>
-  <project name="usb_rt_driver.git"/>
-  <project name="wrist.git"/>
+  <project name="freebot"/>
+  <project name="freebot-controller"/>
+  <project name="realtime-tmp"/>
+  <project name="usb_rt_driver"/>
+  <project name="wrist"/>
 </manifest>
