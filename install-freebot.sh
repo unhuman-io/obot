@@ -2,17 +2,16 @@
 
 tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
 arch=$(uname -m)
+usb_rt_version=0.6.2
 
-system_installs=(
-    https://github.com/unhuman-io/usb_rt_driver/releases/download/0.6.2/usb_rt_driver-0.6.2-${arch}.deb 
-)
+system_installs=()
+modinfo usb_rt 2> /dev/null
+if [ $? -neq 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
+    system_installs+=(https://github.com/unhuman-io/usb_rt_driver/releases/download/${usb_rt_version}/usb_rt_driver-${usb_rt_version}-${arch}.deb)
+fi
 
 installs=(
     https://github.com/unhuman-io/realtime-tmp/releases/download/develop/realtime-tmp-${arch}.deb
-)
-
-local_installs=(
-     https://github.com/unhuman-io/realtime-tmp/releases/download/develop/artifacts.tgz
 )
 
 sudo apt install -y dkms libudev1 dfu-util wget
@@ -29,17 +28,11 @@ for install in ${system_installs[@]}; do
     sudo dpkg -i $(basename $install)
 done
 
-if [ $1 == "--local" ]; then
-    for install in ${local_installs[@]}; do
-        wget $install
-        tar xzf $(basename $install) -C ../
-    done
-else 
-    for install in ${installs[@]}; do
-        wget $install
-        sudo dpkg -i $(basename $install)
-    done
-fi
+for install in ${installs[@]}; do
+    wget $install
+    sudo dpkg -i $(basename $install)
+done
+
 
 popd
 rm -rf $tmp_dir
