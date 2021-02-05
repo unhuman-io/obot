@@ -112,6 +112,7 @@ sudo sh -c 'curl https://storage.googleapis.com/git-repo-downloads/repo > repo'
 sudo chmod a+rx repo
 sudo git config --global user.name "Root"
 sudo git config --global user.email "root@root.com"
+sudo git config --global color.ui true
 sudo ./repo init -b main -u https://github.com/unhuman-io/freebot
 sudo ./repo sync
 popd
