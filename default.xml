@@ -7,4 +7,5 @@
   <project name="realtime-tmp"/>
   <project name="usb_rt_driver"/>
   <project name="wrist"/>
+  <project name="ros" path="catkin-ws/src/unhuman-ros"/>
 </manifest>
