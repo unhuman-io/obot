@@ -1,24 +1,37 @@
 #!/bin/bash
 
-version=R32.4.4
+version=R32.5.0
+release=5.0
 
 sudo apt-get update 
-sudo apt-get install -y libncurses5-dev 
+sudo apt-get install -y libncurses5-dev wget
 sudo apt-get install -y build-essential bc 
 sudo apt-get install -y lbzip2
 sudo apt-get install -y qemu-user-static systemd-container
 
+# keep sudo alive
+while true; do
+  sleep 300
+  sudo -n true
+  kill -0 "$$" 2>/dev/null || exit
+done &
+
 # Create build folder
 # manually download from here:
 # https://developer.nvidia.com/embedded/downloads
-# L4T sample filesystem https://developer.nvidia.com/embedded/L4T/r32_Release_v4.4/r32_Release_v4.4-GMC3/T210/Tegra_Linux_Sample-Root-Filesystem_R32.4.4_aarch64.tbz2
-# L4T Jetson driver package https://developer.nvidia.com/embedded/L4T/r32_Release_v4.4/r32_Release_v4.4-GMC3/T210/Tegra210_Linux_R32.4.4_aarch64.tbz2
-# L4T Sources Jetson https://developer.nvidia.com/embedded/L4T/r32_Release_v4.4/r32_Release_v4.4-GMC3/Sources/T210/public_sources.tbz2
+# L4T sample filesystem https://developer.nvidia.com/embedded/L4T/r32_Release_v5.0/T210/Tegra_Linux_Sample-Root-Filesystem_R32.5.0_aarch64.tbz2
+# L4T Jetson driver package https://developer.nvidia.com/embedded/L4T/r32_Release_v5.0/T210/Tegra210_Linux_R32.5.0_aarch64.tbz2
+# L4T Sources Jetson https://developer.nvidia.com/embedded/L4T/r32_Release_v5.0/sources/T210/public_sources.tbz2
 # 
 # https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 
-#mkdir $HOME/jetson_nano 
+sudo rm -rf $HOME/jetson_nano
+mkdir $HOME/jetson_nano 
 cd $HOME/jetson_nano 
+wget https://developer.nvidia.com/embedded/L4T/r32_Release_v${release}/T210/Tegra_Linux_Sample-Root-Filesystem_${version}_aarch64.tbz2
+wget https://developer.nvidia.com/embedded/L4T/r32_Release_v${release}/T210/Tegra210_Linux_${version}_aarch64.tbz2
+wget https://developer.nvidia.com/embedded/L4T/r32_Release_v${release}/sources/T210/public_sources.tbz2
+wget https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 
 sudo tar xpf Tegra210_Linux_${version}_aarch64.tbz2 
 cd Linux_for_Tegra/rootfs/ 
@@ -86,16 +99,29 @@ make scripts -j10   # fix scripts that were not compiled correctly
 curl https://raw.githubusercontent.com/unhuman-io/freebot/main/install-freebot.sh > install-freebot.sh
 chmod +x install-freebot.sh
 ./install-freebot.sh
+sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
+curl -sSL 'http://keyserver.ubuntu.com/pks/lookup?op=get&search=0xC1CF6E31E6BADE8868B172B4F42ED6FBAB17C654' | apt-key add -
+apt update
+apt install -y ros-melodic-ros-base
 EOF
 sudo rm usr/bin/qemu-aarch64-static
 #sudo mv etc/resolv.conf.tmp etc/resolv.conf
 sudo rm etc/resolv.conf
+pushd usr/local/src
+sudo git clone https://github.com/unhuman-io/wrist
+sudo git clone https://github.com/unhuman-io/freebot
+sudo git clone https://github.com/unhuman-io/freebot-realtime
+sudo mkdir -p catkin-ws/src
+cd catkin-ws/src
+sudo git clone https://github.com/unhuman-io/ros unhuman-ros
+popd
 cd ..
 
 # Generate Jetson Nano image
 cd tools
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_2gb.img -b jetson-nano-2gb-devkit
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_4gb.img -b jetson-nano -r 300
+sudo ./jetson-disk-image-creator.sh -o jetson_nano_4agb.img -b jetson-nano -r 200
 
 ## additional notes after startup
 # I've used the usb serial interface to connect with the device rather than graphical
