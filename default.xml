@@ -6,4 +6,6 @@
   <project name="freebot-controller.git" path="freebot-controller"/>
   <project name="realtime-tmp.git" path="realtime-tmp"/>
   <project name="usb_rt_driver.git" path="usb-rt-driver"/>
+  <project name="wrist.git" path="wrist"/>
+  <project name="ros.git" path="catkin-ws/src/unhuman-ros"/>
 </manifest>

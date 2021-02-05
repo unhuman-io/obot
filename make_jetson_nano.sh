@@ -108,12 +108,12 @@ sudo rm usr/bin/qemu-aarch64-static
 #sudo mv etc/resolv.conf.tmp etc/resolv.conf
 sudo rm etc/resolv.conf
 pushd usr/local/src
-sudo git clone https://github.com/unhuman-io/wrist
-sudo git clone https://github.com/unhuman-io/freebot
-sudo git clone https://github.com/unhuman-io/freebot-realtime
-sudo mkdir -p catkin-ws/src
-cd catkin-ws/src
-sudo git clone https://github.com/unhuman-io/ros unhuman-ros
+sudo sh -c 'curl https://storage.googleapis.com/git-repo-downloads/repo > repo'
+sudo chmod a+rx repo
+sudo git config --global user.name "Root"
+sudo git config --global user.email "root@root.com"
+sudo ./repo init -b main -u https://github.com/unhuman-io/freebot
+sudo ./repo sync
 popd
 cd ..
 
