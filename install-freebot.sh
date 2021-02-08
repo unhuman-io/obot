@@ -6,7 +6,7 @@ usb_rt_version=0.6.2
 
 system_installs=()
 modinfo usb_rt 2> /dev/null
-if [ $? -neq 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
+if [ $? -ne 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
     system_installs+=(https://github.com/unhuman-io/usb_rt_driver/releases/download/${usb_rt_version}/usb_rt_driver-${usb_rt_version}-${arch}.deb)
 fi
 
