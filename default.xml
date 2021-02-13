@@ -4,6 +4,7 @@
 
   <project name="freebot"/>
   <project name="freebot-controller"/>
+  <project name="freebot-realtime"/>
   <project name="realtime-tmp"/>
   <project name="usb_rt_driver"/>
   <project name="wrist"/>
