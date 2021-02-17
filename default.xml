@@ -11,5 +11,6 @@
   <project name="wrist"/>
   <project name="rbdl/rbdl" path="3rdparty/rbdl" revision="master" remote="github"/>
   <project name="ros" path="catkin-ws/src/unhuman-ros"/>
+  <project name="urdf" path="catkin-ws/src/unhuman-urdf"/>
   <project name="acschaefer/aliencontrol" revision="master" remote="github" path="catkin-ws/src/aliencontrol"/>
 </manifest>
