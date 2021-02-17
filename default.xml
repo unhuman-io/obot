@@ -1,12 +1,14 @@
 <manifest>
   <remote fetch="." name="origin"/>
+  <remote fetch="git://github.com" name="github"/>
   <default remote="origin" revision="main" sync-s="true"/>
 
   <project name="freebot"/>
   <project name="freebot-controller"/>
   <project name="freebot-realtime"/>
-  <project name="realtime-tmp"/>
+  <project name="realtime-tmp" revision="develop"/>
   <project name="usb_rt_driver"/>
   <project name="wrist"/>
+  <project name="rbdl/rbdl" path="3rdparty/rbdl" revision="master" remote="github"/>
   <project name="ros" path="catkin-ws/src/unhuman-ros"/>
 </manifest>
