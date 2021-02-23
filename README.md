@@ -4,6 +4,15 @@ See the wiki for a project description: https://github.com/unhuman-io/freebot/wi
 
 # Host PC software
 
+Install linux kernel headers appropriate for your installation. For example:
+```shell
+sudo apt install -y linux-headers-$(uname -r)
+```
+or:
+```shell
+sudo apt install -y raspberrypi-kernel-headers
+```
+then:
 ```shell
 curl https://raw.githubusercontent.com/unhuman-io/freebot/main/install-freebot.sh > install-freebot.sh
 chmod +x install-freebot.sh
