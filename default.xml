@@ -8,7 +8,6 @@
   <project name="freebot-realtime"/>
   <project name="motor-realtime" revision="develop"/>
   <project name="usb_rt_driver"/>
-  <project name="wrist"/>
   <project name="rbdl/rbdl" path="3rdparty/rbdl" revision="master" remote="github"/>
   <project name="freebot-ros" path="catkin-ws/src/freebot-ros"/>
   <project name="freebot-urdf" path="catkin-ws/src/freebot-urdf"/>
