@@ -4,6 +4,13 @@ See the wiki for a project description: https://github.com/unhuman-io/freebot/wi
 
 # Host PC software
 
+Freebot is designed to run on linux both on small computers like the Nvidia 
+Jetson Nano and the Raspberry pi, or larger computers like laptops. A debian 
+based linux distrubution is assumed, but Freebot can be run on other linux 
+distributions as well. Some subcomponents are necessary in order to run 
+hardware. They can be built from source or installed from binaries using the 
+method described below.
+
 Install linux kernel headers appropriate for your installation. For example:
 ```shell
 sudo apt install -y linux-headers-$(uname -r)
@@ -26,10 +33,16 @@ update-freebot
 
 # Source
 
+Software requiruments include installing ros.
+
 ```shell
 sudo apt install repo
 repo init -b main -u https://github.com/unhuman-io/freebot
 repo sync
+```
+A build script builds the project
+```shell
+./freebot/build_freebot.sh
 ```
 
 # Jetson Nano image
@@ -45,3 +58,21 @@ after startup of the jetson nano are:
 
 The image also includes freebot software. Freebot source is installed in `/usr/local/src`. You 
 can change permissions with `sudo chown -R $USER:$USER /usr/local/src`. 
+
+# Run
+
+The first demo uses a Host PC with monitor and joystick to remote control move
+the robot base. Video is transferred from the freebot to the Host PC and data is
+transferred via wifi. To run the demo, on the host PC:
+```shell
+./freebot/jetbot_camera_display.sh
+source catkin-ws/devel/setup.bash
+roslaunch freebot-ros freebot_base.launch
+```
+
+on the Freebot:
+```shell
+./freebot/jetbot_camera_run.sh
+source catkin-ws/devel/setup.bash
+roslaunch freebot-ros freebot_hardware.launch
+```
