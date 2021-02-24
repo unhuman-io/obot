@@ -11,7 +11,7 @@ if [ $? -ne 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
 fi
 
 installs=(
-    https://github.com/unhuman-io/realtime-tmp/releases/download/develop/realtime-tmp-${arch}.deb
+    https://github.com/unhuman-io/motor-realtime/releases/download/develop/motor-realtime-${arch}.deb
 )
 
 sudo apt install -y dkms libudev1 dfu-util wget
