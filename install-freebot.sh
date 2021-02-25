@@ -1,7 +1,7 @@
 #!/bin/bash
 
 tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
-arch=$(uname -m)
+arch=${arch:-$(uname -m)}
 usb_rt_version=0.6.2
 
 system_installs=()
