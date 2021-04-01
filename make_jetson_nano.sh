@@ -2,7 +2,7 @@
 
 version=R32.5.0
 release=5.0
-script_dir=$(dirname $0)
+script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 build_dir=$HOME/jetson_nano
 l4t_dir=${build_dir}/Linux_for_Tegra
 
