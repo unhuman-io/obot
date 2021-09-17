@@ -2,7 +2,7 @@
 
 tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
-usb_rt_version=0.7.0
+usb_rt_version=0.7.1
 
 system_installs=()
 modinfo usb_rt 2> /dev/null
