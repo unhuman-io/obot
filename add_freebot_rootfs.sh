@@ -1,5 +1,5 @@
 #!/bin/bash
-set -eo pipefail
+set -exo pipefail
 
 # ./add_freebot_rootfs.sh $(cat $HOME/jetson_nano/module_headers/kernel/kernel-4.9/include/config/kernel.release)
 

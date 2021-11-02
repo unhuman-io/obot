@@ -1,8 +1,9 @@
 #!/bin/bash
-set -eo pipefail
+set -exo pipefail
 
-version=R32.5.0
-release=5.0
+version=r32.6.1
+release=6.1
+
 pushd ${BASH_SOURCE%/*}/
 script_dir=`pwd`
 popd
