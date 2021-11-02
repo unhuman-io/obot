@@ -5,6 +5,10 @@ set -eo pipefail
 
 echo "********************** Adding freebot stuff ****************************"
 
+if [[ -z $branch ]]; then
+    branch=main
+fi
+
 cd rootfs
 sudo cp /usr/bin/qemu-aarch64-static usr/bin
 sudo cp --remove-destination -L /etc/resolv.conf etc/
@@ -31,7 +35,7 @@ chmod a+rx repo
 git config --global user.name "Root"
 git config --global user.email "root@root.com"
 git config --global color.ui true
-./repo init -b main -u https://github.com/unhuman-io/freebot
+./repo init -b $branch -u https://github.com/unhuman-io/freebot
 ./repo sync
 apt install -y libeigen3-dev || true
 ./freebot/install_freebot_build_deps.sh
