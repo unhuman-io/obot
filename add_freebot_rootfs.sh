@@ -1,4 +1,5 @@
 #!/bin/bash
+set -eo pipefail
 
 # ./add_freebot_rootfs.sh $(cat $HOME/jetson_nano/module_headers/kernel/kernel-4.9/include/config/kernel.release)
 
@@ -6,8 +7,9 @@ echo "********************** Adding freebot stuff ****************************"
 
 cd rootfs
 sudo cp /usr/bin/qemu-aarch64-static usr/bin
-sudo cp -L /etc/resolv.conf etc/
+sudo cp --remove-destination -L /etc/resolv.conf etc/
 sudo systemd-nspawn -D . -M tmpjetson --resolv-conf off --pipe /bin/bash << EOF
+set -xeo pipefail
 apt update
 apt install -y curl
 cd /usr/src/linux-headers-${1}/kernel-4.9

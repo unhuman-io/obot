@@ -1,4 +1,5 @@
 #!/bin/bash
+set -eo pipefail
 
 version=R32.5.0
 release=5.0
@@ -50,7 +51,7 @@ sed -i 's/YYLTYPE yylloc;//' scripts/dtc/dtc-lexer.lex.c_shipped
 TEGRA_KERNEL_OUT=jetson_nano_kernel 
 mkdir $TEGRA_KERNEL_OUT 
 export CROSS_COMPILE=$HOME/jetson_nano/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
-make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig 
+make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig
 make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j10
 
 # Copy results
