@@ -3,7 +3,9 @@ set -eo pipefail
 
 version=R32.5.0
 release=5.0
+pushd ${BASH_SOURCE%/*}/
 script_dir=`pwd`
+popd
 build_dir=$HOME/jetson_nano
 l4t_dir=${build_dir}/Linux_for_Tegra
 
