@@ -1,0 +1,10 @@
+name: Make jetson image
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository code
+        uses: actions/checkout@v2
+      - run: ./make_jetson_nano.sh
+      
