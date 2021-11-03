@@ -36,12 +36,14 @@ update-freebot
 Software requiruments include installing ros.
 
 ```shell
-sudo apt install repo
-repo init -b main -u https://github.com/unhuman-io/freebot
-repo sync
+curl https://storage.googleapis.com/git-repo-downloads/repo > repo
+chmod +x repo
+./repo init -b main -u https://github.com/unhuman-io/freebot-manifest
+./repo sync
 ```
 A build script builds the project
 ```shell
+./freebot/install_freebot_build_deps.sh
 ./freebot/build_freebot.sh
 ```
 
