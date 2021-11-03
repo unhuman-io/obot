@@ -16,6 +16,7 @@ sudo cp --remove-destination -L /etc/resolv.conf etc/
 sudo systemd-nspawn -D . -M tmpjetson --resolv-conf off --pipe /bin/bash << EOF
 set -eo pipefail
 apt update || true           # note some nvidia does not have a release file error
+apt upgrade -y || true
 apt install -y curl || true  # note some blueman error
 cd /usr/src/linux-headers-${1}/kernel-4.9
 make scripts -j10   # fix scripts that were not compiled correctly
