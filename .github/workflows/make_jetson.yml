@@ -7,8 +7,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Free up 24GB of disk space
-        run: sudo rm -rf /usr/share/dotnet
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 1024
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+      - name: Free space
+        run: |
+          echo "Free space:"
+          df -h
       - name: Check out repository code
         uses: actions/checkout@v2
       - run: ./make_jetson_nano.sh
