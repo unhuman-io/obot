@@ -8,6 +8,7 @@ echo "********************** Adding freebot stuff ****************************"
 if [[ -z $branch ]]; then
     branch=main
 fi
+echo "repo branch $branch"
 
 cd rootfs
 sudo cp /usr/bin/qemu-aarch64-static usr/bin
@@ -21,7 +22,7 @@ make scripts -j10   # fix scripts that were not compiled correctly
 add-apt-repository universe
 add-apt-repository multiverse
 add-apt-repository restricted
-sh -c 'echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list'
+echo "deb http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" > /etc/apt/sources.list.d/ros-latest.list
 curl -s https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc | sudo apt-key add -
 apt update || true
 apt install -y ros-melodic-ros-base || true # same errors as above
@@ -35,9 +36,8 @@ chmod a+rx repo
 git config --global user.name "Root"
 git config --global user.email "root@root.com"
 git config --global color.ui true
-./repo init -b $branch -u https://github.com/unhuman-io/freebot
+./repo init -b main -u https://github.com/unhuman-io/freebot-manifest
 ./repo sync
-apt install -y libeigen3-dev || true
 ./freebot/install_freebot_build_deps.sh
 ./freebot/build_freebot.sh
 EOF
