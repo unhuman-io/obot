@@ -15,6 +15,7 @@ if  [ $rosdistro == 'melodic' ]; then
     sudo rosdep init
     rosdep update
     sudo rosdep install --from-paths src --ignore-src -r -y --rosdistro melodic
+    exit 0
 else
     sudo rosdep install --from-paths src --ignore-src -r -y # --os=ubuntu:focal --rosdistro melodic
 fi
