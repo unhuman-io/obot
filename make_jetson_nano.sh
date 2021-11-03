@@ -6,7 +6,7 @@ release=6.1
 
 pushd ${BASH_SOURCE%/*}/
 script_dir=`pwd`
-branch=`git branch --show-current`
+export branch=`git branch --show-current`
 popd
 build_dir=$HOME/jetson_nano
 l4t_dir=${build_dir}/Linux_for_Tegra
