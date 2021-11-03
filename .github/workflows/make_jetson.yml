@@ -16,4 +16,4 @@ jobs:
         uses: actions/upload-artifact@v2
         with:
           name: images
-          path: jetson_nano/Linux_for_Tegra/tools/*.img
+          path: jetson_nano/Linux_for_Tegra/tools/*.zip

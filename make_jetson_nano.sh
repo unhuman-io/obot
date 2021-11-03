@@ -104,5 +104,11 @@ ${script_dir}/add_freebot_rootfs.sh ${kernel_ver}
 # Generate Jetson Nano image
 cd ${l4t_dir}/tools
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_2gb.img -b jetson-nano-2gb-devkit
+zip -qdgds 1g jetson_nano_2gb.zip jetson_nano_2gb.img
+rm jetson_nano_2gb.img
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_4gb.img -b jetson-nano -r 300
+zip -qdgds 1g jetson_nano_4gb.zip jetson_nano_4gb.img
+rm jetson_nano_4gb.img
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_4agb.img -b jetson-nano -r 200
+zip -qdgds 1g jetson_nano_4agb.zip jetson_nano_4agb.img
+rm jetson_nano_4agb.img
