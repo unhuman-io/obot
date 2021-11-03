@@ -3,6 +3,11 @@ set -eo pipefail
 
 version=R32.5.0
 release=5.0
+pushd ${BASH_SOURCE%/*}/
+script_dir=`pwd`
+popd
+build_dir=$HOME/jetson_nano
+l4t_dir=${build_dir}/Linux_for_Tegra
 
 sudo apt-get update 
 sudo apt-get install -y libncurses5-dev wget
@@ -26,18 +31,18 @@ done &
 # 
 # https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 
-sudo rm -rf $HOME/jetson_nano
-mkdir $HOME/jetson_nano 
-cd $HOME/jetson_nano 
+sudo rm -rf ${build_dir}
+mkdir ${build_dir}
+cd ${build_dir}
 wget https://developer.nvidia.com/embedded/L4T/r32_Release_v${release}/T210/Tegra_Linux_Sample-Root-Filesystem_${version}_aarch64.tbz2
 wget https://developer.nvidia.com/embedded/L4T/r32_Release_v${release}/T210/Tegra210_Linux_${version}_aarch64.tbz2
 wget https://developer.nvidia.com/embedded/L4T/r32_Release_v${release}/sources/T210/public_sources.tbz2
 wget https://releases.linaro.org/components/toolchain/binaries/7.3-2018.05/aarch64-linux-gnu/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 
 sudo tar xpf Tegra210_Linux_${version}_aarch64.tbz2 
-cd Linux_for_Tegra/rootfs/ 
+cd ${l4t_dir}/rootfs/ 
 sudo tar xpf ../../Tegra_Linux_Sample-Root-Filesystem_${version}_aarch64.tbz2 
-cd ../../ 
+cd ${build_dir} 
 tar -xvf gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu.tar.xz
 sudo tar -xjf public_sources.tbz2
 tar -xjf Linux_for_Tegra/source/public/kernel_src.tbz2
@@ -55,45 +60,47 @@ make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig
 make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j10
 
 # Copy results
-sudo cp jetson_nano_kernel/arch/arm64/boot/Image $HOME/jetson_nano/Linux_for_Tegra/kernel/Image 
-sudo cp -r jetson_nano_kernel/arch/arm64/boot/dts/* $HOME/jetson_nano/Linux_for_Tegra/kernel/dtb/ 
-sudo make ARCH=arm64 O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=$HOME/jetson_nano/Linux_for_Tegra/rootfs/ 
+sudo cp jetson_nano_kernel/arch/arm64/boot/Image ${l4t_dir}/kernel/Image 
+sudo cp -r jetson_nano_kernel/arch/arm64/boot/dts/* ${l4t_dir}/kernel/dtb/ 
+sudo make ARCH=arm64 O=$TEGRA_KERNEL_OUT modules_install INSTALL_MOD_PATH=${l4t_dir}/rootfs/ 
 
 # lib modules has links to the original source
-cd $HOME/jetson_nano/
+cd ${build_dir}
 mkdir module_headers
-cd module_headers
-tar -xjf ../Linux_for_Tegra/source/public/kernel_src.tbz2
-cd kernel/kernel-4.9
-cp $HOME/jetson_nano/kernel/kernel-4.9/${TEGRA_KERNEL_OUT}/.config .
-cp $HOME/jetson_nano/kernel/kernel-4.9/${TEGRA_KERNEL_OUT}/Module.symvers .
-./scripts/rt-patch.sh apply-patches
+
+cd ${build_dir}/module_headers
+tar -xjf ${l4t_dir}/source/public/kernel_src.tbz2
+
+cd ${build_dir}/module_headers/kernel/kernel-4.9
+cp ${build_dir}/kernel/kernel-4.9/${TEGRA_KERNEL_OUT}/.config .
+cp ${build_dir}/kernel/kernel-4.9/${TEGRA_KERNEL_OUT}/Module.symvers .
+
+${build_dir}/module_headers/kernel/kernel-4.9/scripts/rt-patch.sh apply-patches
 make ARCH=arm64 modules_prepare
-kernel_ver=$(cat include/config/kernel.release)
-sudo cp -r .. $HOME/jetson_nano/Linux_for_Tegra/rootfs/usr/src/linux-headers-${kernel_ver}
-cd $HOME/jetson_nano/Linux_for_Tegra/rootfs/lib/modules/${kernel_ver}
+
+kernel_ver=$(cat ${build_dir}/module_headers/kernel/kernel-4.9/include/config/kernel.release)
+
+sudo cp -r .. ${l4t_dir}/rootfs/usr/src/linux-headers-${kernel_ver}
+cd ${l4t_dir}/rootfs/lib/modules/${kernel_ver}
 sudo rm build
 sudo ln -s /usr/src/linux-headers-${kernel_ver}/kernel-4.9 build
 sudo rm source
 sudo ln -s /usr/src/linux-headers-${kernel_ver}/kernel-4.9 source
 
-cd $HOME/jetson_nano/Linux_for_Tegra/rootfs/ 
+cd ${l4t_dir}/rootfs/ 
 sudo tar --owner root --group root -cjf kernel_supplements.tbz2 lib/modules 
 sudo mv kernel_supplements.tbz2  ../kernel/ 
 sudo tar --owner root --group root -cjf kernel_headers.tbz2 usr/src
 sudo mv kernel_headers.tbz2  ../kernel/ 
 
 # Apply binaries
-cd .. 
+cd ${l4t_dir}
 sudo ./apply_binaries.sh
-
-cd $HOME/jetson_nano/Linux_for_Tegra
 # todo add_freebot_rootfs seems to be failing due to apt sources
-add_freebot_rootfs ${kernel_ver}
-cd ..
+${script_dir}/add_freebot_rootfs.sh ${kernel_ver}
 
 # Generate Jetson Nano image
-cd tools
+cd ${l4t_dir}/tools
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_2gb.img -b jetson-nano-2gb-devkit
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_4gb.img -b jetson-nano -r 300
 sudo ./jetson-disk-image-creator.sh -o jetson_nano_4agb.img -b jetson-nano -r 200
