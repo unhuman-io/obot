@@ -6,7 +6,7 @@ set -eo pipefail
 cd $(dirname $0)/..
 pushd 3rdparty/rbdl
 mkdir -p build && cd build
-cmake -DRBDL_BUILD_ADDON_URDFREADER=ON -DCMAKE_INSTALL_PREFIX=artifacts ..
+cmake -DRBDL_BUILD_ADDON_URDFREADER=ON -DRBDL_USE_ROS_URDF_LIBRARY=OFF -DCMAKE_INSTALL_PREFIX=artifacts ..
 make -j9
 make install
 popd
