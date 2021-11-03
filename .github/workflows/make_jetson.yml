@@ -1,5 +1,8 @@
 name: Make jetson image
-on: [push]
+on:
+  push:
+    branches:
+      - jetson-images
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -7,4 +10,8 @@ jobs:
       - name: Check out repository code
         uses: actions/checkout@v2
       - run: ./make_jetson_nano.sh
-      
+      - name: Upload images
+        uses: actions/upload-artifact@v2
+        with:
+          name: images
+          path: jetson_nano/Linux_for_Tegra/tools/*.img
