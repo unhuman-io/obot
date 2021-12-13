@@ -1,12 +1,12 @@
-# Freebot
+# OBOT
 
-See the wiki for a project description: https://github.com/unhuman-io/freebot/wiki
+The open source robot project. See the wiki for a project description: https://github.com/unhuman-io/obot/wiki
 
 # Host PC software
 
-Freebot is designed to run on linux both on small computers like the Nvidia 
+Obot is designed to run on linux both on small computers like the Nvidia 
 Jetson Nano and the Raspberry pi, or larger computers like laptops. A debian 
-based linux distrubution is assumed, but Freebot can be run on other linux 
+based linux distrubution is assumed, but Obot can be run on other linux 
 distributions as well. Some subcomponents are necessary in order to run 
 hardware. They can be built from source or installed from binaries using the 
 method described below.
@@ -21,7 +21,7 @@ sudo apt install -y raspberrypi-kernel-headers
 ```
 then:
 ```shell
-curl https://raw.githubusercontent.com/unhuman-io/freebot/main/install-freebot.sh > install-freebot.sh
+curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-freebot.sh > install-freebot.sh
 chmod +x install-freebot.sh
 ./install-freebot.sh
 ```
@@ -58,21 +58,21 @@ after startup of the jetson nano are:
 - I switch to text only with sudo systemctl set-default multi-user.target
 - For the ac8265 I found that `sudo iwconfig wlan0 power off` is useful.
 
-The image also includes freebot software. Freebot source is installed in `/usr/local/src`. You 
+The image also includes obot software. Obot source is installed in `/usr/local/src`. You 
 can change permissions with `sudo chown -R $USER:$USER /usr/local/src`. 
 
 # Run
 
 The first demo uses a Host PC with monitor and joystick to remote control move
-the robot base. Video is transferred from the freebot to the Host PC and data is
+the robot base. Video is transferred from the obot to the Host PC and data is
 transferred via wifi. To run the demo, on the host PC:
 ```shell
-./freebot/jetbot_camera_display.sh
+./obot/jetbot_camera_display.sh
 source catkin-ws/devel/setup.bash
 roslaunch freebot-ros freebot_base.launch
 ```
 
-on the Freebot:
+on the Obot:
 ```shell
 ./freebot/jetbot_camera_run.sh
 source catkin-ws/devel/setup.bash
