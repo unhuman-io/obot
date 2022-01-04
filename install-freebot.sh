@@ -1,13 +1,19 @@
 #!/bin/bash
 
+set -eo pipefail
+
 tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
 usb_rt_version=0.7.2
 
 system_installs=()
-modinfo usb_rt 2> /dev/null
-if [ $? -ne 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
-    system_installs+=(https://github.com/unhuman-io/usb_rt_driver/releases/download/${usb_rt_version}/usb_rt_driver-${usb_rt_version}-${arch}.deb)
+if [ ! -z $1 ] && [ $1 == "--no-driver" ]; then
+    echo "not installing usb rt driver"
+else
+    modinfo usb_rt 2> /dev/null
+    if [ $? -ne 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
+        system_installs+=(https://github.com/unhuman-io/usb_rt_driver/releases/download/${usb_rt_version}/usb_rt_driver-${usb_rt_version}-${arch}.deb)
+    fi
 fi
 
 installs=(
