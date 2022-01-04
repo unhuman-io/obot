@@ -1,5 +1,9 @@
 name: Build system
-on: [push]
+on:
+  push:
+  schedule:
+    # 3:20 am every day
+    - cron: '20 3 * * *'
 
 defaults:
   run:
