@@ -10,8 +10,7 @@ system_installs=()
 if [ ! -z $1 ] && [ $1 == "--no-driver" ]; then
     echo "not installing usb rt driver"
 else
-    modinfo usb_rt 2> /dev/null
-    if [ $? -ne 0 ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
+    if [ ! "$(modinfo usb_rt 2> /dev/null)" ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
         system_installs+=(https://github.com/unhuman-io/usb_rt_driver/releases/download/${usb_rt_version}/usb_rt_driver-${usb_rt_version}-${arch}.deb)
     fi
 fi
