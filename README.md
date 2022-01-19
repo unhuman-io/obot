@@ -38,13 +38,13 @@ Software requiruments include installing ros.
 ```shell
 curl https://storage.googleapis.com/git-repo-downloads/repo > repo
 chmod +x repo
-./repo init -b main -u https://github.com/unhuman-io/freebot-manifest
+./repo init -b main -u https://github.com/unhuman-io/obot-manifest
 ./repo sync
 ```
 A build script builds the project
 ```shell
-./freebot/install_freebot_build_deps.sh
-./freebot/build_freebot.sh
+./obot/install_freebot_build_deps.sh
+./obot/build_freebot.sh
 ```
 
 # Jetson Nano image
