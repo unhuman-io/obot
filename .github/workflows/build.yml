@@ -19,6 +19,7 @@ jobs:
         cd /
         ./repo init -b main -u https://github.com/unhuman-io/obot-manifest
         ./repo sync
+        apt update
         ./obot/install_obot_build_deps.sh
         ./obot/build_obot.sh
     - name: test
