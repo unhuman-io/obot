@@ -2,7 +2,7 @@
 
 set -eo pipefail
 
-tmp_dir=$(mktemp -d -t freebot-XXXXXXXX)
+tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
 usb_rt_version=0.7.2
 
@@ -24,9 +24,9 @@ sudo apt install -y dkms libudev1 dfu-util wget
 mkdir -p $tmp_dir
 pushd $tmp_dir
 
-curl https://raw.githubusercontent.com/unhuman-io/freebot/main/update-freebot.sh > update-freebot.sh
-chmod +x update-freebot.sh
-sudo cp update-freebot.sh /usr/bin/update-freebot
+curl https://raw.githubusercontent.com/unhuman-io/obot/main/update-obot.sh > update-obot.sh
+chmod +x update-obot.sh
+sudo cp update-obot.sh /usr/bin/update-obot
 
 for install in ${system_installs[@]}; do
     wget $install

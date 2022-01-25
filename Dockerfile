@@ -4,8 +4,8 @@ RUN apt update && \
     git config --global user.email "root@root.com" && \
     git config --global user.name "root" && \
     git config --global color.ui true && \
-    curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-freebot.sh > install-freebot.sh && \
-    chmod +x install-freebot.sh && \
-    ./install-freebot.sh --no-driver && \
+    curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-obot.sh > install-obot.sh && \
+    chmod +x install-obot.sh && \
+    ./install-obot.sh --no-driver && \
     curl https://storage.googleapis.com/git-repo-downloads/repo > repo && \
     chmod +x repo

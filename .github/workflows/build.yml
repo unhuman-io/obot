@@ -17,14 +17,14 @@ jobs:
     - name: build
       run: |
         cd /
-        ./repo init -b main -u https://github.com/unhuman-io/freebot-manifest
+        ./repo init -b main -u https://github.com/unhuman-io/obot-manifest
         ./repo sync
-        ./freebot/install_freebot_build_deps.sh
-        ./freebot/build_freebot.sh
+        ./obot/install_obot_build_deps.sh
+        ./obot/build_obot.sh
     - name: test
       run: |
         echo test
         . catkin-ws/devel/setup.bash 
         # help for rospkg and yaml error: https://github.com/stereolabs/zed-ros-wrapper/issues/569
         apt install -y python-is-python3
-        roslaunch freebot-ros freebot_hardware.launch & sleep 5 && kill %1
+        roslaunch obot-ros obot_hardware.launch & sleep 5 && kill %1

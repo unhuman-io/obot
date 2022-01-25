@@ -21,14 +21,14 @@ sudo apt install -y raspberrypi-kernel-headers
 ```
 then:
 ```shell
-curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-freebot.sh > install-freebot.sh
-chmod +x install-freebot.sh
-./install-freebot.sh
+curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-obot.sh > install-obot.sh
+chmod +x install-obot.sh
+./install-obot.sh
 ```
 
 then to later update
 ```shell
-update-freebot
+update-obot
 ```
 
 # Source
@@ -43,8 +43,8 @@ chmod +x repo
 ```
 A build script builds the project
 ```shell
-./obot/install_freebot_build_deps.sh
-./obot/build_freebot.sh
+./obot/install_obot_build_deps.sh
+./obot/build_obot.sh
 ```
 
 # Jetson Nano image
@@ -69,12 +69,12 @@ transferred via wifi. To run the demo, on the host PC:
 ```shell
 ./obot/jetbot_camera_display.sh
 source catkin-ws/devel/setup.bash
-roslaunch freebot-ros freebot_base.launch
+roslaunch obot-ros obot_base.launch
 ```
 
 on the Obot:
 ```shell
-./freebot/jetbot_camera_run.sh
+./obot/jetbot_camera_run.sh
 source catkin-ws/devel/setup.bash
-roslaunch freebot-ros freebot_hardware.launch
+roslaunch obot-ros obot_hardware.launch
 ```

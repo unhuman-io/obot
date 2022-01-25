@@ -11,7 +11,7 @@ make -j9
 make install
 popd
 
-pushd freebot-realtime
+pushd obot-realtime
 mkdir -p build && cd build
 cmake -DRBDL_PATH=../../3rdparty/rbdl/build/artifacts -DCMAKE_BUILD_TYPE=RelWithDebInfo ..
 make -j9
@@ -19,5 +19,5 @@ popd
 
 . /opt/ros/*/setup.bash
 pushd catkin-ws
-catkin_make -DFREEBOT_INCLUDE_DIR=../../freebot-realtime/include
+catkin_make -DOBOT_INCLUDE_DIR=../../obot-realtime/include
 popd

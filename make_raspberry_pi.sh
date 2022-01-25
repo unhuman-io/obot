@@ -1,6 +1,6 @@
 #!/bin/bash
 
-tmp_dir=$(mktemp -d -t freebot-pi-XXXXXXXX)
+tmp_dir=$(mktemp -d -t obot-pi-XXXXXXXX)
 pushd $tmp_dir
 wget https://downloads.raspberrypi.org/raspios_lite_armhf/images/raspios_lite_armhf-2021-01-12/2021-01-11-raspios-buster-armhf-lite.zip
 unzip 2021-01-11-raspios-buster-armhf-lite.zip
@@ -16,17 +16,17 @@ sudo e2fsck -f ${loop}p2
 sudo resize2fs ${loop}p2
 sudo mount ${loop}p2 -o rw /mnt
 
-# install freebot
+# install obot
 cd /mnt
 sudo cp /usr/bin/qemu-arm-static usr/bin
 sudo cp -L /etc/resolv.conf etc/
 sudo systemd-nspawn -D . -M tmpjetson --resolv-conf off --pipe /bin/bash << EOF
 apt update
 apt install -y curl
-curl https://raw.githubusercontent.com/unhuman-io/freebot/main/install-freebot.sh > install-freebot.sh
-chmod +x install-freebot.sh
-arch=armv6l ./install-freebot.sh
-rm install-freebot.sh
+curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-obot.sh > install-obot.sh
+chmod +x install-obot.sh
+arch=armv6l ./install-obot.sh
+rm install-obot.sh
 EOF
 sudo rm usr/bin/qemu-arm-static
 sudo rm etc/resolv.conf
@@ -36,7 +36,7 @@ sudo chmod a+rx repo
 sudo git config --global user.name "Root"
 sudo git config --global user.email "root@root.com"
 sudo git config --global color.ui true
-sudo ./repo init -b main -u https://github.com/unhuman-io/freebot
+sudo ./repo init -b main -u https://github.com/unhuman-io/obot
 sudo ./repo sync
 popd
 

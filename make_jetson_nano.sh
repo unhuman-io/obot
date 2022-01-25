@@ -98,8 +98,8 @@ sudo mv kernel_headers.tbz2  ../kernel/
 # Apply binaries
 cd ${l4t_dir}
 sudo ./apply_binaries.sh
-# todo add_freebot_rootfs seems to be failing due to apt sources
-${script_dir}/add_freebot_rootfs.sh ${kernel_ver}
+# todo add_obot_rootfs seems to be failing due to apt sources
+${script_dir}/add_obot_rootfs.sh ${kernel_ver}
 
 # Generate Jetson Nano image
 cd ${l4t_dir}/tools
