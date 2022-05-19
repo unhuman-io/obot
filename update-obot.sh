@@ -6,7 +6,7 @@ pushd $tmp_dir
 
 curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-obot.sh > install_obot.sh
 chmod +x install_obot.sh
-sudo ./install_obot.sh $@
+./install_obot.sh $@
 
 popd
 rm -rf $tmp_dir
