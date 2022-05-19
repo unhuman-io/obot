@@ -6,6 +6,7 @@ tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
 usb_rt_version=0.7.2
 
+echo "install branch: ${branch:=main}"
 system_installs=()
 if [ ! -z $1 ] && [ $1 == "--no-driver" ]; then
     echo "not installing usb rt driver"
@@ -16,7 +17,7 @@ else
 fi
 
 installs=(
-    https://github.com/unhuman-io/motor-realtime/releases/download/develop/motor-realtime-${arch}.deb
+    https://github.com/unhuman-io/motor-realtime/releases/download/${branch}/motor-realtime-${arch}.deb
 )
 
 sudo apt install -y dkms libudev1 dfu-util wget
