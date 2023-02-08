@@ -1,8 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
-version=r32.6.1
-release=6.1
+version=r32.7.1
+release=7.1
 
 pushd ${BASH_SOURCE%/*}/
 script_dir=`pwd`
@@ -53,13 +53,17 @@ cd kernel/kernel-4.9/
 ./scripts/rt-patch.sh apply-patches 
 #some sort of bug
 sed -i 's/YYLTYPE yylloc;//' scripts/dtc/dtc-lexer.lex.c_shipped
+#make v4.3: https://forums.developer.nvidia.com/t/failed-to-make-l4t-kernel-dts/116399/7
+sed -i 's/the-space :=/E =/' scripts/Kbuild.include 
+sed -i 's/the-space += /the-space = $E $E/' scripts/Kbuild.include
+
 
 # Compile kernel
 TEGRA_KERNEL_OUT=jetson_nano_kernel 
 mkdir $TEGRA_KERNEL_OUT 
 export CROSS_COMPILE=$HOME/jetson_nano/gcc-linaro-7.3.1-2018.05-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
 make ARCH=arm64 O=$TEGRA_KERNEL_OUT tegra_defconfig
-make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j10
+make ARCH=arm64 O=$TEGRA_KERNEL_OUT -j`nproc`
 
 # Copy results
 sudo cp jetson_nano_kernel/arch/arm64/boot/Image ${l4t_dir}/kernel/Image 

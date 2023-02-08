@@ -16,10 +16,11 @@ sudo cp --remove-destination -L /etc/resolv.conf etc/
 sudo systemd-nspawn -D . -M tmpjetson --resolv-conf off --pipe /bin/bash << EOF
 set -eo pipefail
 apt update || true           # note some nvidia does not have a release file error
+apt remove -y blueman
 apt upgrade -y || true
 apt install -y curl || true  # note some blueman error
 cd /usr/src/linux-headers-${1}/kernel-4.9
-make scripts -j10   # fix scripts that were not compiled correctly
+make scripts -j`nproc`   # fix scripts that were not compiled correctly
 add-apt-repository universe
 add-apt-repository multiverse
 add-apt-repository restricted
@@ -29,7 +30,7 @@ apt update || true
 apt install -y ros-melodic-ros-base || true # same errors as above
 curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-obot.sh > install-obot.sh
 chmod +x install-obot.sh
-./install-obot.sh    # note won't really configure dkms build correct until system restart
+./install-obot.sh  || true  # note won't really configure dkms build correct until system restart
 # obot system build
 cd /usr/local/src
 sh -c 'curl https://storage.googleapis.com/git-repo-downloads/repo > repo'
