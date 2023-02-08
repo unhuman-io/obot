@@ -21,6 +21,7 @@ sudo apt install -y raspberrypi-kernel-headers
 ```
 then:
 ```shell
+sudo apt install -y curl
 curl https://raw.githubusercontent.com/unhuman-io/obot/main/install-obot.sh > install-obot.sh
 chmod +x install-obot.sh
 ./install-obot.sh
