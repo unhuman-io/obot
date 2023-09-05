@@ -6,7 +6,7 @@ tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
 usb_rt_version=0.7.2
 
-echo "install branch: ${branch:=main}"
+echo "install branch: ${branch:=develop}"
 system_installs=()
 if [ ! -z $1 ] && [ $1 == "--no-driver" ]; then
     echo "not installing usb rt driver"
