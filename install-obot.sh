@@ -4,7 +4,7 @@ set -eo pipefail
 
 tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
-usb_rt_version=0.7.2
+usb_rt_version=0.7.3
 
 echo "install branch: ${branch:=develop}"
 system_installs=()
