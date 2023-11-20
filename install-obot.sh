@@ -4,7 +4,7 @@ set -eo pipefail
 
 tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
-usb_rt_version=0.7.3
+usb_rt_version=0.7.4
 
 echo "install branch: ${branch:=develop}"
 system_installs=()
@@ -14,8 +14,6 @@ else
     if [ ! "$(modinfo usb_rt 2> /dev/null)" ] || [ $(modinfo -F version usb_rt) != "${usb_rt_version}" ]; then
         system_installs+=(https://github.com/unhuman-io/usb_rt_driver/releases/download/${usb_rt_version}/usb_rt_driver-${usb_rt_version}-${arch}.deb)
     fi
-    # helpful to have st dfu rules
-    sudo sh -c "echo 'SUBSYSTEMS==\"usb\", ATTR{idVendor}==\"0483\", ATTR{idProduct}==\"df11\", MODE=\"0666\"' > /etc/udev/rules.d/99-st-dfu.rules"
 fi
 
 installs=(
