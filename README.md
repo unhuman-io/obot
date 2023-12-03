@@ -39,7 +39,7 @@ Software requirements include installing ros.
 ```shell
 curl https://storage.googleapis.com/git-repo-downloads/repo > repo
 chmod +x repo
-./repo init -b main -u https://github.com/unhuman-io/obot-manifest # or git@github.com:unhuman-io/obot-manifest
+./repo init -b main -u git@github.com:unhuman-io/obot-manifest  # or https://github.com/unhuman-io/obot-manifest
 ./repo sync
 ```
 A build script builds the project
