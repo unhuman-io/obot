@@ -21,7 +21,17 @@ installs=(
     https://github.com/unhuman-io/motor-realtime/releases/download/${branch}/motor-realtime-${arch}.deb
 )
 
-sudo apt install -y libudev1 dfu-util wget $driver_deps
+apt_deps=(libudev1 dfu-util wget $driver_deps)
+apt_installs=()
+for dep in ${apt_deps[@]}; do
+    if ! dpkg -l $dep > /dev/null; then
+        apt_installs+=($dep)
+    fi
+done
+if [ ${#apt_installs[@]} -ne 0 ]; then
+    echo "apt installing " ${apt_installs[@]}
+    sudo apt install -y ${apt_installs[@]}
+fi
 
 mkdir -p $tmp_dir
 pushd $tmp_dir
