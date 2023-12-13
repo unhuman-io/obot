@@ -52,8 +52,9 @@ done
 
 # todo make package for motor_gui
 if [ $arch == "x86_64" ]; then 
+    printf "\nInstalling motor_gui to /usr/bin\n"
     wget https://github.com/unhuman-io/obot-demo-gui/releases/download/main/dist.zip
-    unzip dist.zip
+    unzip dist.zip > /dev/null
     chmod +x dist/motor_gui/motor_gui
     sudo rm -rf /usr/bin/motor_gui_lib
     sudo mv dist/motor_gui /usr/bin/motor_gui_lib
