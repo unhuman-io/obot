@@ -4,9 +4,10 @@ set -eo pipefail
 
 tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
+
 usb_rt_version=0.7.4
 
-echo "install branch: ${branch:=develop}"
+echo "install release: ${release:=develop}"
 system_installs=()
 if [ ! -z $1 ] && [ $1 == "--no-driver" ]; then
     echo "not installing usb rt driver"
@@ -18,7 +19,7 @@ else
 fi
 
 installs=(
-    https://github.com/unhuman-io/motor-realtime/releases/download/${branch}/motor-realtime-${arch}.deb
+    https://github.com/unhuman-io/motor-realtime/releases/download/${release}/motor-realtime-${arch}.deb
 )
 
 apt_deps=(libudev1 dfu-util wget $driver_deps)
@@ -50,14 +51,18 @@ for install in ${installs[@]}; do
     sudo dpkg -i $(basename $install)
 done
 
+
+
 # todo make package for motor_gui
 if [ $arch == "x86_64" ]; then 
-    printf "\nInstalling motor_gui to /usr/bin\n"
-    gui_branch=main
-    if [ $branch == "0.14" ]; then
-        gui_branch=v0.4  
-    fi
-    wget https://github.com/unhuman-io/obot-demo-gui/releases/download/$gui_branch/dist.zip
+    case $release in
+    0.14) motor_gui_version=v0.4;;
+    0.15) motor_gui_version=v0.5;;
+    *)    motor_gui_version=main;;
+    esac
+
+    printf "\nInstalling motor_gui (${motor_gui_version}) to /usr/bin\n"
+    wget https://github.com/unhuman-io/obot-demo-gui/releases/download/${motor_gui_version}/dist.zip
     unzip dist.zip > /dev/null
     chmod +x dist/motor_gui/motor_gui
     sudo rm -rf /usr/bin/motor_gui_lib
