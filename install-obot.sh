@@ -4,6 +4,14 @@ set -eo pipefail
 
 tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
+ubuntu_release=$(lsb_release -rs)
+if [ $ubuntu_release == "24.04" ]; then
+    ubuntu_suffix="_ubuntu-24.04"
+elif [ $ubuntu_release == "20.04" ]; then
+    ubuntu_suffix="_ubuntu-20.04"
+else
+    ubuntu_suffix=""
+fi
 
 usb_rt_version=0.7.4
 
@@ -19,7 +27,7 @@ else
 fi
 
 installs=(
-    https://github.com/unhuman-io/motor-realtime/releases/download/${release}/motor-realtime-${arch}.deb
+    https://github.com/unhuman-io/motor-realtime/releases/download/${release}/motor-realtime-${arch}${ubuntu_suffix}.deb
 )
 
 apt_deps=(libudev1 dfu-util wget $driver_deps)
