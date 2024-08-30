@@ -79,6 +79,15 @@ if [ $arch == "x86_64" ]; then
     sudo ln -sf /usr/bin/motor_gui_lib/motor_gui /usr/bin/motor_gui 
 fi
 
+if [ "${PYSTUBGEN}" == "1" ]; then
+export PATH=$PATH:/usr/share/motor-realtime:/usr/share/
+export PYTHONPATH=$PYTHONPATH:/usr/share/motor-realtime:/usr/share/
+sudo apt-get update
+sudo apt-get install python3 python3-pip -y
+sudo pip install pybind11-stubgen
+pybind11-stubgen motor -o /tmp/motor-realtime/ --enum-class-locations ModeDesired:motor --enum-class-locations StepperMode:motor
+sudo cp /tmp/motor-realtime/motor.pyi /usr/share/motor-realtime/motor.pyi
+fi
 
 popd
 rm -rf $tmp_dir
