@@ -80,6 +80,7 @@ if [ $arch == "x86_64" ]; then
 fi
 
 if [ "${PYSTUBGEN}" == "1" ]; then
+echo "GENERATING STUBGEN FOR MOTOR REALTIME"
 export PATH=$PATH:/usr/share/motor-realtime:/usr/share/
 export PYTHONPATH=$PYTHONPATH:/usr/share/motor-realtime:/usr/share/
 sudo apt-get update
