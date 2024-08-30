@@ -32,6 +32,12 @@ then to later update
 update-obot
 ```
 
+optional:Creating Python stubgen for motor-realtime:
+
+```shell
+PYSTUBGEN=1 update-obot
+```
+
 # Source
 
 Software requirements include installing ros.
