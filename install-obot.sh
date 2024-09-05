@@ -5,12 +5,13 @@ set -eo pipefail
 tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
 ubuntu_release=$(lsb_release -rs)
-if [ $ubuntu_release == "24.04" ]; then
-    ubuntu_suffix="_ubuntu-24.04"
-elif [ $ubuntu_release == "20.04" ]; then
-    ubuntu_suffix="_ubuntu-20.04"
-else
-    ubuntu_suffix=""
+ubuntu_suffix=""
+if [ $arch == "x86_64"]; then
+    if [ $ubuntu_release == "24.04" ]; then
+        ubuntu_suffix="_ubuntu-24.04"
+    elif [ $ubuntu_release == "20.04" ]; then
+        ubuntu_suffix="_ubuntu-20.04"
+    fi
 fi
 
 usb_rt_version=0.7.4
