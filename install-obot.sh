@@ -6,7 +6,7 @@ tmp_dir=$(mktemp -d -t obot-XXXXXXXX)
 arch=${arch:-$(uname -m)}
 ubuntu_release=$(lsb_release -rs)
 ubuntu_suffix=""
-if [ $arch == "x86_64"]; then
+if [ $arch == "x86_64" ]; then
     if [ $ubuntu_release == "24.04" ]; then
         ubuntu_suffix="_ubuntu-24.04"
     elif [ $ubuntu_release == "20.04" ]; then
@@ -14,7 +14,7 @@ if [ $arch == "x86_64"]; then
     fi
 fi
 
-usb_rt_version=0.7.4
+usb_rt_version=0.8.0
 
 echo "install release: ${release:=develop}"
 system_installs=()
