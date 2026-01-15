@@ -68,6 +68,7 @@ if [ $arch == "x86_64" ]; then
     0.14) motor_gui_version=v0.4;;
     0.15) motor_gui_version=v0.5;;
     0.16) motor_gui_version=v0.6;;
+    0.18) motor_gui_version=v0.7;;
     *)    motor_gui_version=main;;
     esac
 
