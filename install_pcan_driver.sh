@@ -7,6 +7,8 @@ pushd peak-linux-driver-*
 make -j netdev #CC=gcc-12
 sudo make install_with_dkms #CC=gcc-12
 sudo sed -i '/fast_fwd/s/^# //g' /etc/modprobe.d/pcan.conf
+sudo sed -i 's/# options pcan fdirqcl=.*/options pcan fdirqcl=1/' /etc/modprobe.d/pcan.conf
+sudo sed -i 's/# options pcan fdirqtl=.*/options pcan fdirqtl=1/' /etc/modprobe.d/pcan.conf
 echo "options pcan assign=devid" | sudo tee -a /etc/modprobe.d/pcan.conf
 
 cat << EOF | sudo tee -a /etc/systemd/network/20-pcan-canfd.network
