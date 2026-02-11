@@ -63,15 +63,17 @@ done
 
 
 # todo make package for motor_gui
-if [ $arch == "x86_64" ]; then 
-    case $release in
-    0.14) motor_gui_version=v0.4;;
-    0.15) motor_gui_version=v0.5;;
-    0.16) motor_gui_version=v0.6;;
-    0.18) motor_gui_version=v0.7;;
-    develop) motor_gui_version=develop;;
-    *)    motor_gui_version=main;;
-    esac
+if [ $arch == "x86_64" ]; then
+    if [[ ! -v motor_gui_version ]]; then
+        case $release in
+        0.14) motor_gui_version=v0.4;;
+        0.15) motor_gui_version=v0.5;;
+        0.16) motor_gui_version=v0.6;;
+        0.18) motor_gui_version=v0.7;;
+        develop) motor_gui_version=develop;;
+        *)    motor_gui_version=main;;
+        esac
+    fi
 
     printf "\nInstalling motor_gui (${motor_gui_version}) to /usr/bin\n"
     wget https://github.com/unhuman-io/obot-demo-gui/releases/download/${motor_gui_version}/dist.zip
