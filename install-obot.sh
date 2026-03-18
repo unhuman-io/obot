@@ -82,6 +82,7 @@ if [ $arch == "x86_64" ]; then
     sudo rm -rf /usr/bin/motor_gui_lib
     sudo mv dist/motor_gui /usr/bin/motor_gui_lib
     sudo ln -sf /usr/bin/motor_gui_lib/motor_gui /usr/bin/motor_gui 
+    sudo setcap cap_net_raw+ep /usr/bin/motor_gui_lib/motor_gui
 fi
 
 if [ "${PYSTUBGEN}" == "1" ]; then
