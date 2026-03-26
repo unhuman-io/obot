@@ -75,19 +75,22 @@ if [ $arch == "x86_64" ]; then
         esac
     fi
 
+    sudo apt install -y patchelf
     printf "\nInstalling motor_gui (${motor_gui_version}) to /usr/bin\n"
     wget https://github.com/unhuman-io/obot-demo-gui/releases/download/${motor_gui_version}/dist.zip
     unzip dist.zip > /dev/null
+    rm dist.zip
     chmod +x dist/motor_gui/motor_gui
     sudo rm -rf /usr/bin/motor_gui_lib
     sudo mv dist/motor_gui /usr/bin/motor_gui_lib
+    sudo mv /usr/bin/motor_gui_lib/motor_gui /usr/bin/motor_gui_lib/motor_gui_bin
+    sudo patchelf --set-rpath '$ORIGIN/_internal' /usr/bin/motor_gui_lib/motor_gui_bin
     sudo tee /usr/bin/motor_gui <<- 'EOF'
 		#!/bin/bash
-		export LD_LIBRARY_PATH="/usr/bin/motor_gui_lib/_internal:$LD_LIBRARY_PATH"
-		exec /usr/bin/motor_gui_lib/motor_gui "$@"
+		exec /usr/bin/motor_gui_lib/motor_gui_bin "$@"
 		EOF
     sudo chmod +x /usr/bin/motor_gui
-    sudo setcap cap_net_raw+eip /usr/bin/motor_gui_lib/motor_gui
+    sudo setcap cap_net_raw+eip /usr/bin/motor_gui_lib/motor_gui_bin
     sudo rm -f /etc/ld.so.conf.d/motor_gui.conf # this was a bad item, delete it for a while
 fi
 
