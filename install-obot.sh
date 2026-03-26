@@ -90,7 +90,7 @@ if [ $arch == "x86_64" ]; then
 		exec /usr/bin/motor_gui_lib/motor_gui_bin "$@"
 		EOF
     sudo chmod +x /usr/bin/motor_gui
-    sudo setcap cap_net_raw+eip /usr/bin/motor_gui_lib/motor_gui_bin
+    #sudo setcap cap_net_raw+eip /usr/bin/motor_gui_lib/motor_gui_bin
     sudo rm -f /etc/ld.so.conf.d/motor_gui.conf # this was a bad item, delete it for a while
 fi
 
