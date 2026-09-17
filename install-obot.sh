@@ -72,7 +72,15 @@ if [ $arch == "x86_64" ]; then
         0.15) motor_gui_version=v0.5;;
         0.16) motor_gui_version=v0.6;;
         0.18) motor_gui_version=v0.7;;
-        develop) motor_gui_version=develop;;
+        develop)
+            # the develop gui is built in a ubuntu:24.04 container (python 3.12,
+            # glibc 2.38), so it cannot load on older releases
+            if [ $ubuntu_release == "22.04" ] || [ $ubuntu_release == "20.04" ]; then
+                printf "\nmotor_gui develop targets ubuntu 24.04+, using main on ${ubuntu_release}\n"
+                motor_gui_version=main
+            else
+                motor_gui_version=develop
+            fi;;
         *)    motor_gui_version=main;;
         esac
     fi
