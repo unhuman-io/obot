@@ -72,7 +72,15 @@ if [ $arch == "x86_64" ]; then
         0.15) motor_gui_version=v0.5;;
         0.16) motor_gui_version=v0.6;;
         0.18) motor_gui_version=v0.7;;
-        develop) motor_gui_version=develop;;
+        develop)
+            # the develop gui is built in a ubuntu:24.04 container (python 3.12,
+            # glibc 2.38), so it cannot load on older releases
+            if [ $ubuntu_release == "22.04" ] || [ $ubuntu_release == "20.04" ]; then
+                printf "\nmotor_gui develop targets ubuntu 24.04+, using main on ${ubuntu_release}\n"
+                motor_gui_version=main
+            else
+                motor_gui_version=develop
+            fi;;
         *)    motor_gui_version=main;;
         esac
     fi
@@ -92,6 +100,24 @@ if [ $arch == "x86_64" ]; then
 		exec /usr/bin/motor_gui_lib/motor_gui_bin "$@"
 		EOF
     sudo chmod +x /usr/bin/motor_gui
+    # motor_gui bundles its own motor module and libs; if they are older than the
+    # motor-realtime installed above the gui fails with a messages version
+    # mismatch. Overlay the system copies (same python abi only) to keep them in step.
+    gui_motor_module=$(ls /usr/bin/motor_gui_lib/_internal/motor.cpython-*-${arch}-linux-gnu.so 2>/dev/null | head -1)
+    sys_motor_module=$(ls /usr/share/motor-realtime/motor.cpython-*-${arch}-linux-gnu.so 2>/dev/null | head -1)
+    if [ -n "$gui_motor_module" ] && [ -n "$sys_motor_module" ] && \
+       [ "$(basename $gui_motor_module)" == "$(basename $sys_motor_module)" ]; then
+        printf "syncing motor_gui bundled motor-realtime with the system one\n"
+        sudo cp -f $sys_motor_module $gui_motor_module
+        for lib in libmotor_manager.so libobot-protocol.so; do
+            if [ -f /usr/lib/$lib ] && [ -f /usr/bin/motor_gui_lib/_internal/$lib ]; then
+                sudo cp -f /usr/lib/$lib /usr/bin/motor_gui_lib/_internal/$lib
+            fi
+        done
+    else
+        printf "not syncing motor_gui bundled motor-realtime (python abi differs)\n"
+    fi
+
     #sudo setcap cap_net_raw+eip /usr/bin/motor_gui_lib/motor_gui_bin
     sudo rm -f /etc/ld.so.conf.d/motor_gui.conf # this was a bad item, delete it for a while
 fi
