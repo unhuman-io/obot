@@ -1,0 +1,33 @@
+name: OS image
+# Builds the robot image with Yocto. Hours of CPU and about 100 GB of disk on a first run,
+# so this runs on a self-hosted runner (label: obot-builder) and only when asked to.
+on:
+  workflow_dispatch:
+    inputs:
+      machine:
+        description: kas machine file (os/kas/<machine>.yml)
+        type: choice
+        default: orin-nano
+        options: [orin-nano, orin-nano-sd, agx-orin]
+
+jobs:
+  image:
+    runs-on: [self-hosted, obot-builder]
+    timeout-minutes: 720
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        env:
+          # Outside the checkout, so downloads and shared state survive between runs.
+          KAS_WORK_DIR: ${{ runner.tool_cache }}/obot-os
+        run: |
+          mkdir -p "$KAS_WORK_DIR"
+          kas build os/kas/obot.yml:os/kas/${{ inputs.machine }}.yml:os/kas/ci.yml
+          ls -lh "$KAS_WORK_DIR"/build/tmp/deploy/images/*/*.tegraflash-tar.zst
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obot-image-${{ inputs.machine }}
+          path: ${{ runner.tool_cache }}/obot-os/build/tmp/deploy/images/*/*.tegraflash-tar.zst
+          compression-level: 0

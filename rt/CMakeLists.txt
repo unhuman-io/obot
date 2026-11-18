@@ -12,6 +12,7 @@ endif()
 
 option(OBOT_RT_BUILD_TESTS "Build the tests" ON)
 option(OBOT_RT_WERROR "Treat warnings as errors" OFF)
+option(OBOT_RT_STATIC "Link the programs statically (runs on any aarch64 / x86_64 Linux, whatever its libc)" OFF)
 set(OBOT_RT_SANITIZE "" CACHE STRING "Sanitizers to build with, e.g. address,undefined or thread")
 
 include(GNUInstallDirs)
@@ -54,6 +55,9 @@ foreach(app obot_rtd obot_sim_node obot_rt_latency)
   string(REPLACE "_" "-" exe ${app})
   add_executable(${exe} apps/${app}.cpp)
   target_link_libraries(${exe} PRIVATE obot_rt obot_warnings)
+  if(OBOT_RT_STATIC)
+    target_link_options(${exe} PRIVATE -static)
+  endif()
   install(TARGETS ${exe} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endforeach()
 

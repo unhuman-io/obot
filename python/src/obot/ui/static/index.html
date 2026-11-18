@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>obot operator</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1a1d21; --muted: #667080; --line: #d9dde3;
+    --ok: #1f8a4c; --warn: #b26a00; --bad: #c62828; --accent: #2456c9; --bar: #c9d6f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --panel: #1e2126; --ink: #e8eaed; --muted: #98a1ad; --line: #343941;
+            --ok: #4cc27f; --warn: #e0a040; --bad: #ef6b6b; --accent: #7ea2ff; --bar: #33415f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; }
+  .pill { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); font-weight: 600; }
+  .pill.active { color: var(--ok); border-color: var(--ok); }
+  .pill.idle, .pill.init { color: var(--muted); }
+  .pill.fault, .pill.estop { color: var(--bad); border-color: var(--bad); }
+  .spacer { flex: 1; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.stop { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 700; }
+  main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 12px; padding: 12px 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+  figure { margin: 0; }
+  figure img { width: 100%; display: block; background: #000; border-radius: 6px; aspect-ratio: 4 / 3; object-fit: contain; }
+  figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .side { display: grid; gap: 12px; align-content: start; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 3px 4px; text-align: right; white-space: nowrap; }
+  td:first-child, th:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr.selected td:first-child { color: var(--accent); font-weight: 600; }
+  .range { position: relative; height: 8px; min-width: 70px; background: var(--bar); border-radius: 4px; }
+  .range i { position: absolute; top: -2px; width: 4px; height: 12px; margin-left: -2px; background: var(--accent); border-radius: 2px; }
+  .bad { color: var(--bad); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; color: var(--muted); font-size: 13px; }
+  .keys b { color: var(--ink); font-weight: 600; }
+  #banner { display: none; padding: 8px 16px; background: var(--bad); color: #fff; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<header>
+  <h1 id="robot">obot</h1>
+  <span id="mode" class="pill init">connecting</span>
+  <span id="faults" class="bad"></span>
+  <span id="warnings" class="warn"></span>
+  <span class="spacer"></span>
+  <span id="operator" class="muted"></span>
+  <button data-request="enable">Enable</button>
+  <button data-request="disable">Disable</button>
+  <button data-request="clear_faults">Clear faults</button>
+  <button class="stop" data-request="estop">STOP</button>
+</header>
+<main>
+  <section>
+    <h2>Cameras</h2>
+    <div id="cameras" class="cameras"><p class="muted">No cameras configured.</p></div>
+  </section>
+  <div class="side">
+    <section>
+      <h2>Controller</h2>
+      <p id="pad" class="muted">No controller. Connect one and press any button, or use the keyboard.</p>
+      <div class="keys">
+        <b>hold LB</b><span>deadman: nothing moves without it</span>
+        <b>left stick</b><span>drive and turn; RT goes faster</span>
+        <b>right stick, D-pad</b><span>move the selected arm joints; RB selects the next group</span>
+        <b>Start / B</b><span>enable / disable</span>
+        <b>Back / Y</b><span>clear faults / emergency stop</span>
+        <b>keyboard</b><span>hold Shift as the deadman; W A S D drive, arrow keys move the arm, Space stops</span>
+      </div>
+    </section>
+    <section>
+      <h2>Joints</h2>
+      <table id="joints"><thead><tr><th>joint</th><th>rad</th><th>N m</th><th>&deg;C</th><th>range</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Robot</h2>
+      <dl>
+        <dt>base</dt><dd id="base">-</dd>
+        <dt>odometry</dt><dd id="odom">-</dd>
+        <dt>bus voltage</dt><dd id="voltage">-</dd>
+        <dt>control loop</dt><dd id="loop">-</dd>
+        <dt>command age</dt><dd id="age">-</dd>
+      </dl>
+    </section>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const query = location.search;   // carries ?token=... to the WebSocket and the camera streams
+let info = { joints: [], arm_joints: [], q_min: [], q_max: [], continuous: [], cameras: [] };
+let ws = null;
+let wsOpenSince = 0;
+
+function text(id, value) { const el = $(id); if (el.textContent !== value) el.textContent = value; }
+function fmt(x, digits = 2) { return x === null || x === undefined ? "-" : x.toFixed(digits); }
+
+function showInfo(next) {
+  info = next;
+  text("robot", info.robot || "obot");
+  const cams = $("cameras");
+  if (info.cameras.length) {
+    cams.replaceChildren(...info.cameras.map((name) => {
+      const figure = document.createElement("figure");
+      const img = document.createElement("img");
+      img.alt = name + " camera";
+      img.src = "/camera/" + encodeURIComponent(name) + ".mjpg" + query;
+      const caption = document.createElement("figcaption");
+      caption.id = "cam-" + name;
+      caption.textContent = name;
+      figure.append(img, caption);
+      return figure;
+    }));
+  }
+  const body = $("joints").tBodies[0];
+  body.replaceChildren(...info.joints.map((name, i) => {
+    const row = body.insertRow();
+    row.id = "joint-" + i;
+    for (let c = 0; c < 4; c++) row.insertCell();
+    const range = row.insertCell();
+    if (!info.continuous[i]) range.innerHTML = '<div class="range"><i></i></div>';
+    row.cells[0].textContent = name;
+    return row;
+  }));
+}
+
+function showState(s) {
+  if (s.status) {
+    text("operator", s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : "");
+    const banner = $("banner");
+    const problem = s.status.robot !== "connected" ? "Robot daemon: " + s.status.robot : "";
+    banner.style.display = problem ? "block" : "none";
+    banner.textContent = problem;
+    if (problem) { const m = $("mode"); m.textContent = "no robot"; m.className = "pill init"; }
+  }
+  if (!s.mode) return;
+  const mode = $("mode");
+  mode.textContent = s.mode;
+  mode.className = "pill " + s.mode;
+  text("faults", s.faults.join(", "));
+  text("warnings", s.warnings.join(", "));
+  const group = s.status ? s.status.group : 0;
+  const selected = info.arm_joints.slice(group * 4, group * 4 + 4);
+  s.q.forEach((q, i) => {
+    const row = $("joint-" + i);
+    if (!row) return;
+    row.className = selected.includes(i) ? "selected" : "";
+    const j = s.joints[i];
+    row.cells[0].textContent = j.name + (j.faults.length ? "  " + j.faults.join(", ") : "");
+    row.cells[0].classList.toggle("bad", j.faults.length > 0);
+    row.cells[1].textContent = fmt(q, 3);
+    row.cells[2].textContent = fmt(s.tau[i], 1);
+    row.cells[3].textContent = fmt(s.temperature[i], 0);
+    const marker = row.querySelector(".range i");
+    if (marker && q !== null) {
+      const span = info.q_max[i] - info.q_min[i];
+      marker.style.left = Math.max(0, Math.min(100, (q - info.q_min[i]) / span * 100)) + "%";
+    }
+  });
+  text("base", fmt(s.base_v) + " m/s, " + fmt(s.base_omega) + " rad/s");
+  text("odom", "x " + fmt(s.odom[0]) + "  y " + fmt(s.odom[1]) + "  yaw " + fmt(s.odom[2] * 180 / Math.PI, 0) + "°");
+  const volts = s.bus_voltage.filter((v) => v !== null);
+  text("voltage", volts.length ? fmt(Math.min(...volts), 1) + " V" : "-");
+  text("loop", "late " + fmt(s.wake_latency_us, 0) + " µs, cycle " + fmt(s.exec_us, 0) + " µs, overruns " + s.overruns);
+  text("age", s.command_age_ms === null ? "no command yet" : fmt(s.command_age_ms, 0) + " ms");
+  for (const [name, cam] of Object.entries(s.cameras || {})) {
+    const caption = $("cam-" + name);
+    if (caption) caption.textContent = name + (cam.error ? ": " + cam.error : "");
+  }
+}
+
+function connect() {
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" + query);
+  ws.onopen = () => { wsOpenSince = Date.now(); };
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "info") showInfo(message);
+    else if (message.type === "state") showState(message);
+  };
+  ws.onclose = () => {
+    $("banner").style.display = "block";
+    $("banner").textContent = "Connection to the robot lost. Reconnecting...";
+    setTimeout(connect, 1000);
+  };
+}
+
+function send(message) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+document.querySelectorAll("button[data-request]").forEach((button) => {
+  button.addEventListener("click", () => send({ type: "request", request: button.dataset.request }));
+});
+
+// --- input: a real gamepad if there is one, otherwise the keyboard --------------------------
+const keys = new Set();
+const moveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"];
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") send({ type: "request", request: "disable" });
+  keys.add(e.code);
+  if (moveKeys.includes(e.code)) e.preventDefault();
+});
+window.addEventListener("keyup", (e) => keys.delete(e.code));
+window.addEventListener("blur", () => keys.clear());   // a hidden page must not keep driving
+
+function keyboardPad() {
+  const axes = [0, 0, 0, 0];
+  const buttons = new Array(17).fill(0);
+  const shift = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  if (!shift) return null;
+  buttons[4] = 1;
+  axes[1] = (keys.has("KeyS") ? 1 : 0) - (keys.has("KeyW") ? 1 : 0);
+  axes[0] = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+  axes[3] = (keys.has("ArrowDown") ? 1 : 0) - (keys.has("ArrowUp") ? 1 : 0);
+  axes[2] = (keys.has("ArrowRight") ? 1 : 0) - (keys.has("ArrowLeft") ? 1 : 0);
+  return { axes, buttons };
+}
+
+function gamepad() {
+  for (const pad of navigator.getGamepads ? navigator.getGamepads() : []) {
+    if (pad && pad.connected && pad.mapping === "standard") return pad;
+  }
+  return null;
+}
+
+let sentNeutral = true;
+setInterval(() => {
+  const pad = document.hidden ? null : gamepad();
+  let state = null;
+  if (pad) {
+    state = { axes: Array.from(pad.axes).slice(0, 4), buttons: pad.buttons.map((b) => b.value) };
+    text("pad", pad.id);
+  } else {
+    state = document.hidden ? null : keyboardPad();
+    text("pad", state ? "Keyboard" : "No controller. Connect one and press any button, or use the keyboard.");
+  }
+  // Send while there is input, and one neutral message when it ends.
+  if (state) { send({ type: "gamepad", ...state }); sentNeutral = false; }
+  else if (!sentNeutral) { send({ type: "gamepad", axes: [0, 0, 0, 0], buttons: [] }); sentNeutral = true; }
+}, 25);
+
+connect();
+</script>
+</body>
+</html>

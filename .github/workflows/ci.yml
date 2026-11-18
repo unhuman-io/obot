@@ -1,0 +1,142 @@
+name: CI
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  OBOT_BUILD_ROOT: ${{ github.workspace }}/build
+
+jobs:
+  rt:
+    name: rt ${{ matrix.preset }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, preset: release }
+          - { os: ubuntu-24.04, preset: clang }
+          - { os: ubuntu-24.04, preset: asan }
+          - { os: ubuntu-24.04, preset: tsan }
+          - { os: ubuntu-24.04-arm, preset: release }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang
+      - name: Configure
+        working-directory: rt
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        working-directory: rt
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        working-directory: rt
+        run: ctest --preset ${{ matrix.preset }}
+
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        run: |
+          pipx install clang-format==21.1.8
+          clang-format --version
+          clang-format --dry-run --Werror rt/src/*/*.cpp rt/include/obot/*/*.h rt/apps/*.cpp rt/tests/test_*.cpp
+
+  python:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build the daemon
+        working-directory: rt
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
+          cmake --preset release -DOBOT_RT_BUILD_TESTS=OFF
+          cmake --build --preset release
+      - name: Virtual CAN interfaces
+        # The vcan tests skip themselves if the runner's kernel has no vcan module.
+        run: |
+          sudo apt-get install -y -qq linux-modules-extra-$(uname -r) || true
+          if sudo modprobe vcan; then
+            for i in 0 1 2; do
+              sudo ip link add vcan$i type vcan && sudo ip link set vcan$i mtu 72 && sudo ip link set vcan$i up
+            done
+          fi
+          ip -brief link
+      - name: Install
+        run: pip install -e "python[ui,log,dev]"
+      - name: Lint
+        run: ruff check python
+      - name: Test
+        working-directory: python
+        env:
+          OBOT_RT_BIN_DIR: ${{ github.workspace }}/build/release
+        run: pytest -v -rs
+
+  static-aarch64:
+    # Statically linked programs for robots that keep their existing OS (the Jetson Nano's
+    # L4T R32 / Ubuntu 18.04 cannot build C++20 itself).
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        working-directory: rt
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build
+          cmake --preset release -DOBOT_RT_STATIC=ON
+          cmake --build --preset release
+          ctest --preset release
+      - name: Package
+        run: |
+          mkdir -p dist/obot-rt-aarch64/bin dist/obot-rt-aarch64/config
+          cp build/release/obot-rtd build/release/obot-sim-node build/release/obot-rt-latency dist/obot-rt-aarch64/bin/
+          cp config/*.toml dist/obot-rt-aarch64/config/
+          file dist/obot-rt-aarch64/bin/obot-rtd
+          tar -C dist -czf obot-rt-aarch64-static.tar.gz obot-rt-aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obot-rt-aarch64-static
+          path: obot-rt-aarch64-static.tar.gz
+
+  os-parse:
+    # Checks that the Yocto layer and its pinned dependencies parse and that every package
+    # of the image resolves. The image itself is built by os-image.yml on a machine with
+    # the disk and time for it.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gawk wget diffstat unzip texinfo chrpath socat cpio python3-pexpect \
+            xz-utils debianutils iputils-ping python3-git python3-jinja2 python3-subunit zstd lz4 file locales libacl1
+          sudo locale-gen en_US.UTF-8
+          # Ubuntu 24.04 blocks the user namespaces bitbake uses unless AppArmor allows them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          pipx install kas
+      - name: Parse and resolve the Orin Nano image
+        env:
+          KAS_WORK_DIR: ${{ runner.temp }}/kas
+        run: |
+          mkdir -p "$KAS_WORK_DIR"
+          kas shell os/kas/obot.yml:os/kas/orin-nano.yml -c 'bitbake -p && bitbake -n obot-image | tail -5'
