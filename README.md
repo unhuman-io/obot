@@ -2,6 +2,23 @@
 
 The open source robot project. See the wiki for a project description: https://github.com/unhuman-io/obot/wiki
 
+# Host software without ROS
+
+The `obot3-host` work replaces the ROS-based host stack with a small realtime daemon and a
+set of tools around it. It runs both the obot3 (Jetson Orin, CAN) and the v1 robot (Jetson
+Nano, USB), and on a desktop against simulated actuators.
+
+| | |
+|---|---|
+| [`rt/`](rt) | `obot-rtd`: the realtime actuator daemon (C++), simulated actuators, tests |
+| [`python/`](python) | client library, `obot` command, gamepad teleoperation, operator web page with cameras, MCAP recording |
+| [`config/`](config) | one description per robot |
+| [`os/`](os) | Yocto image for Jetson Orin: PREEMPT_RT, isolated control CPU, CAN, containers |
+| [`docs/host.md`](docs/host.md) | how it works and how to use it |
+| [`docs/learning.md`](docs/learning.md) | plan for teaching the robot tasks |
+
+What follows describes the earlier software, which is still what `install-obot.sh` installs.
+
 # Host PC software
 
 Obot is designed to run on linux both on small computers like the Nvidia 
