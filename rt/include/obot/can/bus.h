@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "obot/can/frame.h"
 
@@ -26,9 +27,9 @@ class Bus {
     // Read up to max frames without blocking. Returns the number read.
     virtual int recv(Frame* out, int max) = 0;
 
-    // File descriptor that becomes readable when frames are waiting, or -1 if there is none
-    // (in-process buses); such buses are polled by calling recv().
-    virtual int fd() const { return -1; }
+    // Appends the file descriptors that become readable when frames are waiting. In-process
+    // buses have none and are simply polled by calling recv().
+    virtual void append_fds(std::vector<int>& out) const { (void)out; }
 
     virtual const std::string& name() const = 0;
     const BusCounters& counters() const { return counters_; }

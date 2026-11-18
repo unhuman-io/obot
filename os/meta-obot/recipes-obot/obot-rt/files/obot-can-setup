@@ -1,0 +1,16 @@
+#!/bin/sh
+# Bring up the CAN interfaces with the bit rates from the robot configuration.
+# obot-rtd is the single source of truth for them: it prints the commands, this runs them.
+config="${1:-/etc/obot/robot.toml}"
+commands="$(/usr/bin/obot-rtd --config "$config" --print-can-setup)" || exit 1
+echo "$commands" | while read -r line; do
+    [ -n "$line" ] || continue
+    # An interface that is not there (adapter unplugged) must not stop the others;
+    # obot-rtd reports a missing interface itself when it starts.
+    if $line; then
+        echo "obot-can-setup: $line"
+    else
+        echo "obot-can-setup: failed: $line" >&2
+    fi
+done
+exit 0

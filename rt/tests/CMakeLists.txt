@@ -14,6 +14,7 @@ endfunction()
 obot_test(test_can)
 obot_test(test_ipc)
 obot_test(test_drivers)
+obot_test(test_usbrt)
 obot_test(test_setpoint_filter)
 obot_test(test_config)
 obot_test(test_runtime)
@@ -22,7 +23,13 @@ obot_test(test_runtime)
 add_test(NAME config_obot3_check
          COMMAND obot-rtd --check --config ${PROJECT_SOURCE_DIR}/../config/obot3.toml)
 
+add_test(NAME config_obot1_check
+         COMMAND obot-rtd --check --config ${PROJECT_SOURCE_DIR}/../config/obot1.toml)
+
 # The whole daemon, two seconds on built-in simulated actuators.
 add_test(NAME daemon_sim_smoke
          COMMAND obot-rtd --sim --no-rt --duration 2 --shm-name obot_ctest_smoke
                  --config ${PROJECT_SOURCE_DIR}/../config/obot3.toml)
+add_test(NAME daemon_sim_smoke_obot1
+         COMMAND obot-rtd --sim --no-rt --duration 2 --shm-name obot_ctest_smoke1
+                 --config ${PROJECT_SOURCE_DIR}/../config/obot1.toml)

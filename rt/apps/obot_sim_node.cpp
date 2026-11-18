@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
         robot::override_interfaces(config, false, bus_overrides);
         for (size_t b = 0; b < config.buses.size(); ++b) {
             const robot::BusConfig& bc = config.buses[b];
-            if (bc.interface == "sim") continue;
+            if (bc.interface == "sim" || bc.interface == "usbrt") continue;
             buses.push_back(std::make_unique<can::SocketCanBus>(bc.name, bc.interface, bc.fd));
             auto device_bus = std::make_unique<sim::DeviceBus>(*buses.back());
             for (const robot::JointConfig& j : config.joints) {
@@ -66,7 +66,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "obot-sim-node: %zu simulated actuators on %s\n", device_bus->size(),
                          bc.interface.c_str());
             device_buses.push_back(std::move(device_bus));
-            fds.push_back(pollfd{buses.back()->fd(), POLLIN, 0});
+            std::vector<int> bus_fds;
+            buses.back()->append_fds(bus_fds);
+            for (int fd : bus_fds) fds.push_back(pollfd{fd, POLLIN, 0});
         }
     } catch (const std::exception& e) {
         std::fprintf(stderr, "obot-sim-node: %s\n", e.what());

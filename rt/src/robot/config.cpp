@@ -72,7 +72,8 @@ const toml::table* subtable(const Ctx& ctx, const toml::table& table, const std:
 
 RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
     RobotConfig c;
-    check_keys(ctx, root, "top level", {"robot", "rt", "bus", "joint", "base"});
+    // [[camera]] and [teleop] belong to the operator tools (python/); they are not read here.
+    check_keys(ctx, root, "top level", {"robot", "rt", "bus", "joint", "base", "camera", "teleop"});
 
     if (const auto* t = subtable(ctx, root, "top level", "robot")) {
         check_keys(ctx, *t, "[robot]",
@@ -117,12 +118,13 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
         get(ctx, *t, where, "fd", b.fd);
         get(ctx, *t, where, "bitrate", b.bitrate);
         get(ctx, *t, where, "data_bitrate", b.data_bitrate);
+        b.usb = b.interface == "usbrt";
         if (b.name.empty()) ctx.fail("[[bus]]", "'name' is required");
         if (b.interface.empty()) ctx.fail(where, "'interface' is required");
         if (b.bitrate <= 0 || b.data_bitrate <= 0) ctx.fail(where, "bit rates must be positive");
         for (const auto& other : c.buses) {
             if (other.name == b.name) ctx.fail(where, "duplicate bus name");
-            if (other.interface == b.interface && b.interface != "sim") {
+            if (other.interface == b.interface && b.interface != "sim" && b.interface != "usbrt") {
                 ctx.fail(where, "interface " + b.interface + " is used by two buses");
             }
         }
@@ -169,7 +171,8 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
                     "kd_max",
                     "temperature_max",
                     "cubemars",
-                    "sim"});
+                    "sim",
+                    "usb_name"});
         get(ctx, *t, where, "bus", j.bus);
         std::string driver = "obot";
         get(ctx, *t, where, "driver", driver);
@@ -181,6 +184,8 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
             ctx.fail(where, "unknown driver '" + driver + "' (obot, cubemars_mit)");
         }
         get(ctx, *t, where, "id", j.id);
+        j.usb_name = j.name;
+        get(ctx, *t, where, "usb_name", j.usb_name);
         get(ctx, *t, where, "gear_ratio", j.transmission.gear_ratio);
         get(ctx, *t, where, "torque_constant", j.transmission.torque_constant);
         get(ctx, *t, where, "direction", j.transmission.direction);
@@ -232,8 +237,11 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
             if (j.id < 1 || j.id > static_cast<int>(actuator::obot_can::kMaxAddress)) {
                 ctx.fail(where, "id must be 1..126 for the obot driver");
             }
-            if (!bus.fd) ctx.fail(where, "the obot driver needs a CAN FD bus (fd = true)");
+            if (!bus.fd && !bus.usb) {
+                ctx.fail(where, "the obot driver needs a CAN FD bus (fd = true)");
+            }
         } else {
+            if (bus.usb) ctx.fail(where, "a usbrt bus only carries obot drivers");
             if (j.id < 1 || j.id > 127) ctx.fail(where, "id must be 1..127 for the cubemars driver");
         }
         const float dir = j.transmission.direction;
@@ -382,7 +390,11 @@ std::vector<BusLoad> bus_loads(const RobotConfig& config) {
         l.busy_s += can::frame_time_s(tx, fd, fd, timing) + can::frame_time_s(rx, fd, fd, timing);
         l.frames += 2;
     }
-    for (auto& l : loads) l.load = l.busy_s / (config.period_us * 1e-6);
+    for (size_t i = 0; i < loads.size(); ++i) {
+        // USB is not limited by bit time the way CAN is; only CAN buses carry a budget.
+        if (config.buses[i].usb) loads[i].busy_s = 0;
+        loads[i].load = loads[i].busy_s / (config.period_us * 1e-6);
+    }
     return loads;
 }
 

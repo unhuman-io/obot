@@ -10,5 +10,4 @@ __pycache__/
 description/obot3/meshes/
 # Yocto / kas work directories
 os/build/
-os/layers/
 os/.kas*

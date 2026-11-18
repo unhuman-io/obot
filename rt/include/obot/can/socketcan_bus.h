@@ -21,7 +21,7 @@ class SocketCanBus : public Bus {
 
     bool send(const Frame& frame) override;
     int recv(Frame* out, int max) override;
-    int fd() const override { return fd_; }
+    void append_fds(std::vector<int>& out) const override { out.push_back(fd_); }
     const std::string& name() const override { return name_; }
 
  private:

@@ -157,3 +157,21 @@ wheel_radius = 0.125          # m, 250 mm tyre
 track_width = 0.38756         # m, between tyre centres
 v_max = 0.8                   # m/s
 omega_max = 2.0               # rad/s
+
+# --- Operator tools (read by the Python side, ignored by obot-rtd) ----------------------
+# The RealSense colour streams show up as ordinary V4L2 devices; the device paths depend
+# on what is plugged in (`v4l2-ctl --list-devices`).
+
+[[camera]]
+name = "base"
+source = "v4l2:/dev/video0"   # VERIFY
+width = 640
+height = 480
+fps = 15
+
+[[camera]]
+name = "wrist"
+source = "v4l2:/dev/video6"   # VERIFY
+width = 640
+height = 480
+fps = 15

@@ -21,6 +21,7 @@
 
 #include "obot/can/fake_bus.h"
 #include "obot/can/socketcan_bus.h"
+#include "obot/can/usbrt_bus.h"
 #include "obot/ipc/layout_json.h"
 #include "obot/ipc/shm_region.h"
 #include "obot/robot/config.h"
@@ -52,6 +53,8 @@ struct Options {
     bool dump_layout = false;
     bool no_rt = false;
     bool sim = false;
+    bool print_can_setup = false;
+    int cpu = -2;  // -2: use the configured value
     std::vector<std::string> bus_overrides;
     std::string shm_name;
 };
@@ -62,6 +65,8 @@ void usage() {
                  "  --sim              run every bus on built-in simulated actuators\n"
                  "  --bus NAME=IFACE   use another CAN interface for a bus (repeatable)\n"
                  "  --shm-name NAME    shared memory name, instead of the configured one\n"
+                 "  --cpu N            pin the control thread to this CPU instead of the configured one\n"
+                 "  --print-can-setup  print the 'ip link' commands that configure the CAN interfaces, and exit\n"
                  "  --check            validate the configuration and the bus load, then exit\n"
                  "  --duration SEC     run for this long, then exit (default: until SIGINT/SIGTERM)\n"
                  "  --stats-json FILE  write loop timing statistics to FILE on exit\n"
@@ -90,6 +95,11 @@ bool parse(int argc, char** argv, Options& o) {
             o.bus_overrides.push_back(v);
         } else if (a == "--shm-name") {
             if (!value(o.shm_name)) return false;
+        } else if (a == "--cpu") {
+            if (!value(v)) return false;
+            o.cpu = std::atoi(v.c_str());
+        } else if (a == "--print-can-setup") {
+            o.print_can_setup = true;
         } else if (a == "--sim") {
             o.sim = true;
         } else if (a == "--check") {
@@ -209,11 +219,29 @@ int main(int argc, char** argv) {
         loop.config = robot::load_config(opt.config);
         robot::override_interfaces(loop.config, opt.sim, opt.bus_overrides);
         if (!opt.shm_name.empty()) loop.config.shm_name = opt.shm_name;
+        if (opt.cpu > -2) loop.config.rt.cpu = opt.cpu;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "obot-rtd: %s\n", e.what());
         return 1;
     }
     const robot::RobotConfig& config = loop.config;
+
+    if (opt.print_can_setup) {
+        // The bit rates live in the robot configuration; the system applies them with this.
+        for (const robot::BusConfig& b : config.buses) {
+            if (b.interface == "sim" || b.interface == "usbrt" || b.interface.rfind("vcan", 0) == 0) continue;
+            std::printf("ip link set %s down\n", b.interface.c_str());
+            if (b.fd) {
+                std::printf("ip link set %s type can bitrate %.0f dbitrate %.0f fd on restart-ms 100\n",
+                            b.interface.c_str(), b.bitrate, b.data_bitrate);
+            } else {
+                std::printf("ip link set %s type can bitrate %.0f fd off restart-ms 100\n", b.interface.c_str(),
+                            b.bitrate);
+            }
+            std::printf("ip link set %s txqueuelen 64 up\n", b.interface.c_str());
+        }
+        return 0;
+    }
 
     bool load_ok = true;
     for (const robot::BusLoad& l : robot::bus_loads(config)) {
@@ -247,10 +275,22 @@ int main(int argc, char** argv) {
                 loop.sim_buses.push_back(std::move(device_bus));
                 loop.buses.push_back(&loop.sim_pairs.back()->host());
             } else {
-                loop.real_buses.push_back(std::make_unique<can::SocketCanBus>(
-                    bc.name, bc.interface, bc.fd, robot::rx_ids(config, static_cast<int>(b))));
+                if (bc.interface == "usbrt") {
+                    std::vector<can::UsbRtDevice> boards;
+                    for (const robot::JointConfig& j : config.joints) {
+                        if (j.bus_index == static_cast<int>(b)) {
+                            boards.push_back(can::UsbRtDevice{static_cast<uint8_t>(j.id), j.usb_name});
+                        }
+                    }
+                    loop.real_buses.push_back(std::make_unique<can::UsbRtBus>(bc.name, boards));
+                } else {
+                    loop.real_buses.push_back(std::make_unique<can::SocketCanBus>(
+                        bc.name, bc.interface, bc.fd, robot::rx_ids(config, static_cast<int>(b))));
+                }
                 loop.buses.push_back(loop.real_buses.back().get());
-                loop.fds.push_back(pollfd{loop.real_buses.back()->fd(), POLLIN, 0});
+                std::vector<int> bus_fds;
+                loop.real_buses.back()->append_fds(bus_fds);
+                for (int fd : bus_fds) loop.fds.push_back(pollfd{fd, POLLIN, 0});
             }
         }
         loop.runtime = std::make_unique<robot::Runtime>(config, loop.buses);

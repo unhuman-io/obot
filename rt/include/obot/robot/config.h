@@ -13,7 +13,10 @@ namespace obot::robot {
 
 struct BusConfig {
     std::string name;
-    std::string interface;  // SocketCAN interface, or "sim" for built-in simulated actuators
+    // SocketCAN interface; "usbrt" for boards on the usb_rt driver; "sim" for built-in
+    // simulated actuators.
+    std::string interface;
+    bool usb = false;  // configured as "usbrt" (kept when the interface is overridden for simulation)
     bool fd = true;
     double bitrate = 1'000'000;
     double data_bitrate = 5'000'000;
@@ -26,7 +29,8 @@ struct JointConfig {
     std::string bus;
     DriverKind driver = DriverKind::Obot;
     int id = 1;
-    int bus_index = 0;  // filled in by the loader
+    int bus_index = 0;     // filled in by the loader
+    std::string usb_name;  // on a "usbrt" bus: the board's name, defaults to the joint name
 
     actuator::Transmission transmission;
     bool idle_damped = true;

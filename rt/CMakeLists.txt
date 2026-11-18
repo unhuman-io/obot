@@ -36,6 +36,7 @@ add_library(obot_rt STATIC
   src/actuator/obot_driver.cpp
   src/can/fake_bus.cpp
   src/can/socketcan_bus.cpp
+  src/can/usbrt_bus.cpp
   src/ipc/layout_json.cpp
   src/ipc/shm_region.cpp
   src/robot/config.cpp
