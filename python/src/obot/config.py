@@ -33,6 +33,10 @@ class TeleopConfig:
     arm_speed: float = 0.5  # fraction of each joint's qd_max at full stick
     deadband: float = 0.12
     max_lead: float = 0.25  # how far a jogged target may run ahead of the joint, rad
+    # A controller whose state has not changed at all for this long while something is held
+    # is treated as released (a wireless controller that dropped out keeps reporting its last
+    # state until the OS notices). Costs a re-press on long steady moves; 0 disables.
+    controller_timeout_s: float = 5.0
 
 
 @dataclass
@@ -70,7 +74,7 @@ def load(path: str | None = None) -> ToolsConfig:
         known = {k: entry[k] for k in ("name", "source", "width", "height", "fps", "quality") if k in entry}
         config.cameras.append(CameraConfig(**known))
     teleop = doc.get("teleop", {})
-    for key in ("base_speed", "arm_speed", "deadband", "max_lead"):
+    for key in ("base_speed", "arm_speed", "deadband", "max_lead", "controller_timeout_s"):
         if key in teleop:
             setattr(config.teleop, key, float(teleop[key]))
     return config

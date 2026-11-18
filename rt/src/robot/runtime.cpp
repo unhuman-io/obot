@@ -22,6 +22,12 @@ constexpr int64_t kFutureStampToleranceNs = 2'000'000;
 bool is_position_mode(JointMode m) {
     return m == JointMode::Position || m == JointMode::Impedance;
 }
+
+// The joint's velocity as a starting point for a setpoint: within what the filter may command.
+template <typename J>
+float measured_velocity(const J& j) {
+    return std::clamp(j.driver->status().qd, -j.cfg.qd_max, j.cfg.qd_max);
+}
 }  // namespace
 
 Runtime::Runtime(const RobotConfig& config, std::vector<can::Bus*> buses) : config_(config), buses_(std::move(buses)) {
@@ -95,7 +101,7 @@ bool Runtime::accept_command(const ipc::RobotCommand& c) const {
 void Runtime::enter_active() {
     for (Joint& j : joints_) {
         const actuator::DriveStatus& st = j.driver->status();
-        j.position_filter.reset(st.q, 0);
+        j.position_filter.reset(st.q, measured_velocity(j));
         j.velocity_limiter.reset(0);
         j.holding = false;
         j.sent = actuator::DriveCommand{};
@@ -156,26 +162,29 @@ void Runtime::command_joint(Joint& j, size_t index, bool fresh, float dt) {
         if (is_position_mode(previous)) {
             if (!j.holding) {
                 j.holding = true;
+                // With the client's own (possibly zero) impedance gains the setpoint says
+                // little about where the joint is: hold from the measured position instead.
+                if (previous == JointMode::Impedance) j.position_filter.reset(st.q, measured_velocity(j));
                 const float stop = j.position_filter.stopping_point();
                 j.hold_q = c.continuous ? stop : std::clamp(stop, c.q_min, c.q_max);
             }
-            dc.mode = previous;
+            dc.mode = JointMode::Position;
             dc.q = j.position_filter.update(j.hold_q, dt);
             dc.qd = j.position_filter.velocity();
-            dc.kp = j.sent.kp;
-            dc.kd = j.sent.kd;
+            dc.kp = c.kp;
+            dc.kd = c.kd;
             dc.tau = 0;
         } else if (previous == JointMode::Velocity) {
             dc.mode = JointMode::Velocity;
             dc.qd = j.velocity_limiter.update(0, c.qdd_max, dt);
             dc.kd = c.kd;
-            j.position_filter.reset(st.q, 0);
+            j.position_filter.reset(st.q, measured_velocity(j));
         } else if (previous == JointMode::Torque || previous == JointMode::Damped) {
             dc.mode = JointMode::Damped;
-            j.position_filter.reset(st.q, 0);
+            j.position_filter.reset(st.q, measured_velocity(j));
         } else {
             dc.mode = JointMode::Idle;
-            j.position_filter.reset(st.q, 0);
+            j.position_filter.reset(st.q, measured_velocity(j));
         }
         j.sent = dc;
         return;
@@ -186,12 +195,12 @@ void Runtime::command_joint(Joint& j, size_t index, bool fresh, float dt) {
         case JointMode::Idle:
         case JointMode::Damped:
             dc.mode = wanted;
-            j.position_filter.reset(st.q, 0);
+            j.position_filter.reset(st.q, measured_velocity(j));
             j.velocity_limiter.reset(0);
             break;
         case JointMode::Position:
         case JointMode::Impedance: {
-            if (!is_position_mode(previous)) j.position_filter.reset(st.q, 0);
+            if (!is_position_mode(previous)) j.position_filter.reset(st.q, measured_velocity(j));
             const float target = c.continuous ? q_target : std::clamp(q_target, c.q_min, c.q_max);
             dc.mode = wanted;
             dc.q = j.position_filter.update(target, dt);
@@ -216,7 +225,7 @@ void Runtime::command_joint(Joint& j, size_t index, bool fresh, float dt) {
             dc.qd = j.velocity_limiter.update(target, c.qdd_max, dt);
             dc.kd = c.kd;
             dc.tau = std::clamp(tau, -c.tau_max, c.tau_max);
-            j.position_filter.reset(st.q, 0);
+            j.position_filter.reset(st.q, measured_velocity(j));
             break;
         }
         case JointMode::Torque: {
@@ -227,7 +236,7 @@ void Runtime::command_joint(Joint& j, size_t index, bool fresh, float dt) {
             }
             dc.mode = JointMode::Torque;
             dc.tau = t;
-            j.position_filter.reset(st.q, 0);
+            j.position_filter.reset(st.q, measured_velocity(j));
             j.velocity_limiter.reset(0);
             break;
         }
@@ -244,22 +253,33 @@ void Runtime::begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* co
         warning_ |= ipc::robot_warning::kOverrun;
     }
 
-    if (command && (!have_command_ || command->seq != command_.seq)) {
-        if (accept_command(*command)) {
+    if (command && (!seen_command_ || command->seq != seen_seq_)) {
+        seen_command_ = true;
+        seen_seq_ = command->seq;
+        // A stamp ahead of the clock would turn "fresh" later, with no live client behind it.
+        const bool valid =
+            accept_command(*command) && command->stamp_ns <= timing.now_mono_ns + kFutureStampToleranceNs;
+        const bool estop = command->estop_id != last_estop_id_;
+        const bool request = command->request_id != last_request_id_;
+        last_estop_id_ = command->estop_id;
+        last_request_id_ = command->request_id;
+        if (valid) {
             command_ = *command;
             have_command_ = true;
-            const bool estop = command_.estop_id != last_estop_id_;
-            const bool request = command_.request_id != last_request_id_;
-            last_estop_id_ = command_.estop_id;
-            last_request_id_ = command_.request_id;
-            if (estop) {
-                handle_request(Request::Estop);  // and whatever else was asked for is dropped
-            } else if (request) {
-                handle_request(static_cast<Request>(command_.request));
-            }
         } else {
             warning_ |= ipc::robot_warning::kCommandInvalid;
+            invalid_pending_ = true;
         }
+        if (valid) invalid_pending_ = false;
+        // Stopping never depends on the rest of the command being acceptable.
+        if (estop) {
+            handle_request(Request::Estop);  // and whatever else was asked for is dropped
+        } else if (request) {
+            const auto wanted = static_cast<Request>(command->request);
+            if (valid || wanted == Request::Disable) handle_request(wanted);
+        }
+    } else if (invalid_pending_) {
+        warning_ |= ipc::robot_warning::kCommandInvalid;  // the newest command is still the refused one
     }
 
     bool fresh = false;
@@ -286,7 +306,10 @@ void Runtime::begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* co
         j.sent.clear_faults = clearing;
         can::Frame frame;
         j.driver->make_frame(j.sent, poll_only, static_cast<uint32_t>(cycle_), frame);
-        if (!j.bus->send(frame)) warning_ |= ipc::robot_warning::kTxDropped;
+        if (!j.bus->send(frame)) {
+            warning_ |= ipc::robot_warning::kTxDropped;
+            j.driver->send_failed();
+        }
         j.replied = false;
     }
     if (clearing) --clear_burst_;

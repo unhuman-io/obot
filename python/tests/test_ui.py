@@ -120,3 +120,68 @@ async def test_token(robot, daemon):
         ok = await client.get("/?token=s3cret")
         assert ok.status == 200
         assert (await client.get("/api/info")).status == 200      # the cookie from the page carries on
+
+
+async def test_control_is_released_and_taken_over_cleanly(robot, daemon):
+    """An operator who lets go stops writing commands; taking over later starts from where the
+    arm is, even if something else moved it in between."""
+    from obot import JointMode
+
+    async with TestClient(TestServer(make_server(daemon).app())) as client:
+        ws = await client.ws_connect("/ws")
+        await ws.send_json({"type": "request", "request": "enable"})
+        await next_state(ws, lambda s: s["mode"] == "active")
+        for _ in range(10):                                   # a touch on the deadman, then hands off
+            await ws.send_json(gamepad(lb=1))
+            await asyncio.sleep(0.03)
+        await next_state(ws, lambda s: s["status"]["operator"] is not None)
+        for _ in range(60):                                   # the page keeps reporting a resting controller
+            await ws.send_json(gamepad())
+            await asyncio.sleep(0.03)
+        state = await next_state(ws, lambda s: s["status"]["operator"] is None)
+        assert robot.state()["command_age_us"] > 300_000      # nothing has been written for a while
+
+        # A script moves the shoulder while nobody operates.
+        command = robot.new_command()
+        command["joint_mode"][:4] = JointMode.POSITION
+        command["q"][0] = 0.5
+        for _ in range(150):
+            robot.send(command)
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.5)                              # the script stops; the daemon holds
+        before = robot.state()
+        assert before["q"][0] == pytest.approx(0.5, abs=0.1)  # there, less the sag of a plain PD loop
+
+        # The operator touches the deadman again: the arm must stay exactly where it is held.
+        for _ in range(30):
+            await ws.send_json(gamepad(lb=1))
+            await asyncio.sleep(0.03)
+        state = robot.state()
+        assert 0 <= state["command_age_us"] < 200_000         # the page is commanding again
+        assert state["q_cmd"][0] == pytest.approx(float(before["q_cmd"][0]), abs=0.01)
+        assert state["q"][0] == pytest.approx(float(before["q"][0]), abs=0.02)
+        await ws.close()
+
+
+async def test_any_operator_can_stop_the_robot(robot, daemon):
+    async with TestClient(TestServer(make_server(daemon).app())) as client:
+        driver = await client.ws_connect("/ws")
+        bystander = await client.ws_connect("/ws")
+        await driver.send_json({"type": "request", "request": "enable"})
+        await next_state(driver, lambda s: s["mode"] == "active")
+
+        async def drive():
+            for _ in range(60):
+                await driver.send_json(gamepad(axes=(0, -1, 0, 0), lb=1))
+                await asyncio.sleep(0.03)
+
+        task = asyncio.create_task(drive())
+        await next_state(driver, lambda s: s["base_v"] > 0.1)
+        await bystander.send_json(gamepad(y=1))               # not in control, presses stop
+        await next_state(bystander, lambda s: s["mode"] == "estop")
+        await task                                            # the driver keeps pushing the stick: no effect
+        await asyncio.sleep(1.0)
+        assert robot.state()["mode"] == RobotMode.ESTOP
+        assert abs(robot.state()["base_v"]) < 0.1             # braked by the idle drives
+        await driver.close()
+        await bystander.close()

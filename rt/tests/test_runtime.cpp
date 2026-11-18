@@ -563,3 +563,105 @@ TEST_CASE("overruns are counted and flagged") {
     CHECK(r.state.overruns == 1);
     CHECK((r.state.warning & ipc::robot_warning::kOverrun) != 0);
 }
+
+TEST_CASE("stop and disable are taken even from a command that is otherwise refused") {
+    Rig r;
+    r.enable();
+    r.set_all(JointMode::Position);
+    r.run(100);
+    // A client streaming garbage, and the operator's stop lands in the same mailbox write.
+    r.command.q[kShoulder] = std::numeric_limits<float>::quiet_NaN();
+    r.send(Request::Estop);
+    r.cycle();
+    CHECK(mode_of(r) == kEstop);
+    CHECK((r.state.warning & ipc::robot_warning::kCommandInvalid) != 0);
+
+    Rig d;
+    d.enable();
+    d.command.q[kShoulder] = std::numeric_limits<float>::infinity();
+    d.send(Request::Disable);
+    d.cycle();
+    CHECK(mode_of(d) == kIdle);
+    // ...but nothing that starts motion is taken from a refused command.
+    d.send(Request::Enable);
+    d.run(5, 0);
+    CHECK(mode_of(d) == kIdle);
+    CHECK((d.state.warning & ipc::robot_warning::kCommandInvalid) != 0);  // still reported
+}
+
+TEST_CASE("a command stamped in the future is refused, also once the clock catches up") {
+    Rig r;
+    r.enable();
+    r.command.joint_mode[kShoulder] = static_cast<uint8_t>(JointMode::Position);
+    r.command.q[kShoulder] = 0.8f;
+    r.send();
+    r.command.stamp_ns += 500'000'000;  // half a second ahead
+    r.run(1000, 0);
+    CHECK((r.state.warning & ipc::robot_warning::kCommandInvalid) != 0);
+    CHECK(std::fabs(r.state.q[kShoulder]) < 0.01f);
+    CHECK(r.state.joint_mode[kShoulder] == static_cast<uint8_t>(JointMode::Idle));
+}
+
+TEST_CASE("a client with soft impedance gains goes away: the hold is stiff and starts where the joint is") {
+    Rig r;
+    r.enable();
+    r.command.joint_mode[kShoulder] = static_cast<uint8_t>(JointMode::Impedance);
+    r.command.q[kShoulder] = 0.9f;  // setpoint far from the joint, which zero gains never move
+    r.command.kp[kShoulder] = 0;
+    r.command.kd[kShoulder] = 0;
+    r.run(1500);
+    CHECK(std::fabs(r.state.q[kShoulder]) < 0.01f);
+    CHECK(r.state.q_cmd[kShoulder] == doctest::Approx(0.9f));
+    r.run(500, 0);  // the client is gone
+    CHECK((r.state.warning & ipc::robot_warning::kCommandStale) != 0);
+    CHECK(r.state.kp_cmd[kShoulder] == 200.0f);  // the joint's own gains
+    CHECK(r.state.kd_cmd[kShoulder] == 8.0f);
+    CHECK(std::fabs(r.state.q_cmd[kShoulder]) < 0.02f);  // held where it was, not yanked to 0.9
+    CHECK(std::fabs(r.state.q[kShoulder]) < 0.02f);
+    CHECK(mode_of(r) == kActive);
+}
+
+TEST_CASE("switching a moving joint from velocity to position keeps the setpoint within the acceleration limit") {
+    Rig r;
+    r.enable();
+    r.command.joint_mode[kWrist] = static_cast<uint8_t>(JointMode::Velocity);
+    r.command.qd[kWrist] = 2.0f;
+    r.run(300);
+    CHECK(r.state.qd[kWrist] == doctest::Approx(2.0f).epsilon(0.1));
+    r.command.joint_mode[kWrist] = static_cast<uint8_t>(JointMode::Position);
+    r.command.q[kWrist] = r.state.q[kWrist];  // "stop here"
+    // The setpoint has to pick up from the velocity the joint really has (a little under
+    // the commanded one) and brake from there, not start from a standstill.
+    float last = r.state.qd[kWrist];
+    float worst = 0;
+    for (int i = 0; i < 400; ++i) {
+        if (i % 10 == 0) r.send();
+        r.cycle();
+        worst = std::max(worst, std::fabs(r.state.qd_cmd[kWrist] - last) / 0.001f);
+        last = r.state.qd_cmd[kWrist];
+    }
+    CHECK(worst <= 20.0f * 1.5f);  // qdd_max, plus the resolution of the measured velocity
+    CHECK(std::fabs(r.state.qd[kWrist]) < 0.05f);
+    CHECK(mode_of(r) == kActive);
+}
+
+TEST_CASE("a cubemars drive whose enter-motor-mode frame is lost is asked again") {
+    Rig r;
+    r.run(20, 0);
+    // The bus's transmit queue is full when the first frame of the enabled joint goes out.
+    can::Frame filler;
+    filler.id = 0x7ff;
+    while (r.pairs[1]->host().send(filler)) {
+    }
+    r.devices_powered = false;  // nothing drains the queue during this cycle
+    r.set_all(JointMode::Position);
+    r.send(Request::Enable);
+    r.cycle();
+    CHECK(mode_of(r) == kActive);
+    CHECK((r.state.warning & ipc::robot_warning::kTxDropped) != 0);
+    CHECK_FALSE(r.cubemars_device(1, 0).motor_mode());
+    r.devices_powered = true;
+    r.run(10);
+    CHECK(r.cubemars_device(1, 0).motor_mode());
+    CHECK(mode_of(r) == kActive);
+}

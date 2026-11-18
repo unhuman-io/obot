@@ -196,11 +196,17 @@ TEST_CASE("shared memory region: a restarted daemon gets a fresh region") {
     const std::string name = unique_name("restart");
     RobotInfo info{};
     info.num_joints = 1;
-    ShmRegion first = ShmRegion::create(name, info);
-    first.publish();
-    first.ring().push(pattern(7));
+    auto first = std::make_unique<ShmRegion>(ShmRegion::create(name, info));
+    first->publish();
+    first->ring().push(pattern(7));
     ShmRegion old_client = ShmRegion::attach(name);
 
+    // While the first daemon lives, a second one for the same name is refused.
+    CHECK_THROWS_WITH_AS(ShmRegion::create(name, info), doctest::Contains("another obot-rtd"), std::runtime_error);
+    ShmRegion still = ShmRegion::attach(name);
+    CHECK(still.info().num_joints == 1);
+
+    first.reset();  // the first daemon exits
     info.num_joints = 2;
     ShmRegion second = ShmRegion::create(name, info);
     second.publish();

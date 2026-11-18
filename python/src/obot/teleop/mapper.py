@@ -58,6 +58,41 @@ class GamepadState:
         return self.buttons[button] > 0.5
 
 
+    def neutral(self) -> bool:
+        return not any(b > 0.5 for b in self.buttons) and not any(abs(a) > 0.25 for a in self.axes)
+
+
+def button_request(previous: GamepadState, pad: GamepadState) -> Request:
+    """The request a newly pressed button stands for; stopping takes precedence."""
+    for button, request in ((BTN_Y, Request.ESTOP), (BTN_B, Request.DISABLE), (BTN_BACK, Request.CLEAR_FAULTS),
+                            (BTN_START, Request.ENABLE)):
+        if pad.pressed(button) and not previous.pressed(button):
+            return request
+    return Request.NONE
+
+
+class InputWatch:
+    """Treats input that has not changed for too long as released.
+
+    Neither the Linux joystick API nor the browser's gamepad API says whether a controller
+    is still there: one that dropped out simply stops changing. So does a stick held hard
+    against its stop, which is why the timeout is seconds, not milliseconds.
+    """
+
+    def __init__(self, timeout_s: float):
+        self.timeout_s = timeout_s
+        self._last: GamepadState | None = None
+        self._changed_at = 0.0
+
+    def filter(self, pad: GamepadState, now: float) -> GamepadState:
+        if self._last is None or pad.axes != self._last.axes or pad.buttons != self._last.buttons:
+            self._last = GamepadState(list(pad.axes), list(pad.buttons))
+            self._changed_at = now
+        if self.timeout_s > 0 and now - self._changed_at > self.timeout_s and not pad.neutral():
+            return GamepadState()
+        return pad
+
+
 @dataclass
 class TeleopOutput:
     command: np.ndarray  # a COMMAND record
@@ -79,6 +114,14 @@ class TeleopMapper:
         self._have_targets = False
         self._previous = GamepadState()
 
+    def resync(self) -> None:
+        """Forget the jog targets: the next step starts from where the joints are.
+
+        Call when this mapper takes over after something else (a policy, another
+        operator) may have moved the arm.
+        """
+        self._have_targets = False
+
     @property
     def num_groups(self) -> int:
         return max(1, (len(self.arm) + 3) // 4)
@@ -97,15 +140,7 @@ class TeleopMapper:
         """One tick. `state` is the newest RobotState record (or None)."""
         info = self.info
         command = np.zeros((), COMMAND)
-        request = Request.NONE
-        if self._edge(pad, BTN_Y):
-            request = Request.ESTOP
-        elif self._edge(pad, BTN_B):
-            request = Request.DISABLE
-        elif self._edge(pad, BTN_BACK):
-            request = Request.CLEAR_FAULTS
-        elif self._edge(pad, BTN_START):
-            request = Request.ENABLE
+        request = button_request(self._previous, pad)
         if self._edge(pad, BTN_RB):
             self.group = (self.group + 1) % self.num_groups
         self._previous = GamepadState(list(pad.axes), list(pad.buttons))
@@ -117,7 +152,11 @@ class TeleopMapper:
             return TeleopOutput(command, request, False, self.group)
         n = info.num_joints
         if not self._have_targets:
-            self._targets[:] = state["q"][:n]
+            # Take over what the daemon is already holding where a joint is under position
+            # control (so the arm does not sag by its tracking error), else where the joint is.
+            modes = state["joint_mode"][:n]
+            held = (modes == JointMode.POSITION) | (modes == JointMode.IMPEDANCE)
+            self._targets[:] = np.where(held, state["q_cmd"][:n], state["q"][:n])
             self._have_targets = True
 
         deadman = pad.pressed(BTN_LB)

@@ -311,7 +311,14 @@ int main(int argc, char** argv) {
         if (!problem.empty()) std::fprintf(stderr, "obot-rtd: warning: %s\n", problem.c_str());
     }
 
-    ipc::ShmRegion shm = ipc::ShmRegion::create(config.shm_name, loop.runtime->info());
+    ipc::ShmRegion shm = [&] {
+        try {
+            return ipc::ShmRegion::create(config.shm_name, loop.runtime->info());
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "obot-rtd: %s\n", e.what());
+            std::exit(1);
+        }
+    }();
     loop.shm = &shm;
     shm.publish();
 

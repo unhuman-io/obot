@@ -59,6 +59,7 @@ void CubeMarsDriver::make_frame(const DriveCommand& command, bool poll_only, uin
     out = can::Frame{};
     out.id = config_.id;
     out.len = 8;
+    last_was_enter_ = false;
     const bool idle = poll_only || command.mode == ipc::JointMode::Idle;
     if (idle) {
         // The exit frame leaves the motor unpowered and is answered with a status, so it
@@ -72,6 +73,7 @@ void CubeMarsDriver::make_frame(const DriveCommand& command, bool poll_only, uin
         std::memset(out.data, 0xFF, 7);
         out.data[7] = kEnterMotorMode;
         motor_mode_ = true;
+        last_was_enter_ = true;
         return;
     }
     const Transmission& t = config_.transmission;
@@ -100,6 +102,11 @@ void CubeMarsDriver::make_frame(const DriveCommand& command, bool poll_only, uin
             break;
     }
     pack_mit(p, v, kp, kd, tau, config_.ranges, out.data);
+}
+
+void CubeMarsDriver::send_failed() {
+    // The request to enter motor mode never reached the drive: ask again next cycle.
+    if (last_was_enter_) motor_mode_ = false;
 }
 
 bool CubeMarsDriver::on_frame(const can::Frame& frame) {

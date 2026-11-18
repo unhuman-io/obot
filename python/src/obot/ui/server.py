@@ -24,10 +24,11 @@ from aiohttp import WSMsgType, web
 
 from ..client import NotRunning, Request, Robot, describe
 from ..config import ToolsConfig
-from ..teleop.mapper import GamepadState, TeleopMapper
+from ..teleop.mapper import GamepadState, InputWatch, TeleopMapper, button_request
 
 STATIC = Path(__file__).parent / "static"
 GAMEPAD_TIMEOUT_S = 0.3  # a silent operator is treated as having let go of everything
+RELEASE_S = 1.0  # an operator who touches nothing for this long gives up control
 TICK_HZ = 50
 STATE_HZ = 15
 _REQUESTS = {
@@ -41,22 +42,36 @@ _REQUESTS = {
 class Operator:
     """A source of gamepad input: a browser tab or the local controller."""
 
-    def __init__(self, label: str):
+    def __init__(self, label: str, controller_timeout_s: float):
         self.label = label
         self.pad = GamepadState()
+        self._raw = GamepadState()  # as received, before the stuck-input filter
         self.stamp = 0.0
+        self.engaged_at = 0.0
+        self._watch = InputWatch(controller_timeout_s)
 
-    def update(self, pad: GamepadState) -> None:
-        self.pad = pad
-        self.stamp = time.monotonic()
+    def update(self, pad: GamepadState) -> Request:
+        """Take new input. Returns the request a newly pressed button stands for."""
+        now = time.monotonic()
+        request = button_request(self._raw, pad)
+        self._raw = pad
+        self.pad = self._watch.filter(pad, now)
+        self.stamp = now
+        if not self.pad.neutral():
+            self.engaged_at = now
+        return request
 
     @property
     def fresh(self) -> bool:
         return time.monotonic() - self.stamp < GAMEPAD_TIMEOUT_S
 
     def engaged(self) -> bool:
-        """Is the operator doing anything at all (any button, any stick off centre)?"""
-        return self.fresh and (any(b > 0.5 for b in self.pad.buttons) or any(abs(a) > 0.25 for a in self.pad.axes))
+        """Is the operator doing something right now (any button, any stick off centre)?"""
+        return self.fresh and not self.pad.neutral()
+
+    def holding_control(self) -> bool:
+        """Still counts as operating: input is arriving and was not neutral for long."""
+        return self.fresh and time.monotonic() - self.engaged_at < RELEASE_S
 
 
 class UiServer:
@@ -123,7 +138,7 @@ class UiServer:
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=5)
         await ws.prepare(request)
-        operator = Operator(f"browser {request.remote}")
+        operator = Operator(f"browser {request.remote}", self.config.teleop.controller_timeout_s)
         self.sockets[ws] = operator
         try:
             await ws.send_json({"type": "info", **self._info_dict()})
@@ -137,9 +152,10 @@ class UiServer:
                 if not isinstance(data, dict):
                     continue
                 if data.get("type") == "gamepad":
-                    operator.update(GamepadState.from_lists(data.get("axes", []), data.get("buttons", [])))
+                    pad = GamepadState.from_lists(data.get("axes", []), data.get("buttons", []))
+                    self._queue(operator.update(pad))
                 elif data.get("type") == "request" and data.get("request") in _REQUESTS:
-                    self.pending_requests.append(_REQUESTS[data["request"]])
+                    self._queue(_REQUESTS[data["request"]])
         finally:
             self.sockets.pop(ws, None)
             if self.controlling is operator:
@@ -220,17 +236,33 @@ class UiServer:
                 if self.joystick:
                     self.joystick.close()
                 self.joystick = Joystick(path)
-                self.local = Operator(f"controller {path}")
+                self.local = Operator(f"controller {path}", self.config.teleop.controller_timeout_s)
             except OSError:
                 return
-        self.local.update(self.joystick.poll())
+        self._queue(self.local.update(self.joystick.poll()))
+
+    def _queue(self, request: Request) -> None:
+        """Requests come from any operator's buttons and any page, not only from whoever drives."""
+        if request != Request.NONE:
+            self.pending_requests.append(request)
+
+    def _next_request(self) -> Request:
+        if not self.pending_requests:
+            return Request.NONE
+        if Request.ESTOP in self.pending_requests:  # a stop is never queued behind anything
+            self.pending_requests.clear()
+            return Request.ESTOP
+        return self.pending_requests.pop(0)
 
     def _choose_operator(self) -> Operator | None:
-        """One operator at a time: whoever is in control keeps it until they go quiet."""
-        if self.controlling and self.controlling.fresh:
+        """One operator at a time: whoever is in control keeps it until they let go of everything."""
+        if self.controlling and self.controlling.holding_control():
             return self.controlling
         candidates = ([self.local] if self.local else []) + list(self.sockets.values())
         self.controlling = next((o for o in candidates if o.engaged()), None)
+        if self.controlling is not None and self.mapper is not None:
+            # Something else may have moved the arm since this page last drove it.
+            self.mapper.resync()
         return self.controlling
 
     async def _broadcast(self, payload: dict) -> None:
@@ -268,7 +300,7 @@ class UiServer:
             operator = self._choose_operator()
             pad = operator.pad if operator else GamepadState()
             out = self.mapper.step(pad, state, dt)
-            request = self.pending_requests.pop(0) if self.pending_requests else out.request
+            request = self._next_request()
             if operator is not None or request != Request.NONE:
                 self.robot.send(out.command, request)
             self.status.update(operator=operator.label if operator else None, group=out.group, moving=out.moving)

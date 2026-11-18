@@ -244,6 +244,11 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
             if (bus.usb) ctx.fail(where, "a usbrt bus only carries obot drivers");
             if (j.id < 1 || j.id > 127) ctx.fail(where, "id must be 1..127 for the cubemars driver");
         }
+        if (j.output_encoder && !j.continuous) {
+            // Position commands go to the drive in the motor encoder's frame, which is not
+            // related to the output encoder's until the two are aligned.
+            ctx.fail(where, "output_encoder is not supported yet for position controlled joints");
+        }
         const float dir = j.transmission.direction;
         if (dir != 1.0f && dir != -1.0f) ctx.fail(where, "direction must be 1 or -1");
         if (!(j.transmission.gear_ratio > 0)) ctx.fail(where, "gear_ratio must be positive");

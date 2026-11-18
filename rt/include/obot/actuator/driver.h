@@ -49,6 +49,9 @@ class Driver {
     // anything (used before the robot has taken control of the actuator).
     virtual void make_frame(const DriveCommand& command, bool poll_only, uint32_t cycle, can::Frame& out) = 0;
 
+    // The frame from the last make_frame() could not be queued on the bus.
+    virtual void send_failed() {}
+
     // Identifier of the status frames this driver consumes.
     virtual uint32_t rx_id() const = 0;
 

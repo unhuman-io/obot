@@ -44,6 +44,14 @@ ShmRegion ShmRegion::create(const std::string& name, const RobotInfo& info) {
     r.name_ = name;
     r.owner_ = true;
     const std::string path = path_for(name);
+    // One daemon per name: a second one would unlink the region the first is serving and
+    // then drive the same actuators.
+    const std::string lock_path = path + ".lock";
+    r.lock_fd_ = ::open(lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0660);
+    if (r.lock_fd_ < 0) fail("open " + lock_path);
+    if (::flock(r.lock_fd_, LOCK_EX | LOCK_NB) != 0) {
+        throw std::runtime_error(path + ": another obot-rtd is already serving this name");
+    }
     // A fresh inode every time: clients still mapped to a previous daemon's region keep
     // seeing that (now dead) region instead of a half-initialised new one.
     ::unlink(path.c_str());
@@ -141,6 +149,8 @@ void ShmRegion::write_command(RobotCommand command) {
 void ShmRegion::release() {
     if (base_) ::munmap(base_, kTotalSize);
     if (fd_ >= 0) ::close(fd_);
+    if (lock_fd_ >= 0) ::close(lock_fd_);  // releases the single-daemon lock
+    lock_fd_ = -1;
     base_ = nullptr;
     fd_ = -1;
 }
@@ -154,6 +164,7 @@ ShmRegion& ShmRegion::operator=(ShmRegion&& other) noexcept {
         release();
         name_ = std::move(other.name_);
         fd_ = std::exchange(other.fd_, -1);
+        lock_fd_ = std::exchange(other.lock_fd_, -1);
         base_ = std::exchange(other.base_, nullptr);
         owner_ = std::exchange(other.owner_, false);
         header_ = std::exchange(other.header_, nullptr);

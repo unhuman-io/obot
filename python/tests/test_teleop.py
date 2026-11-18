@@ -142,3 +142,35 @@ def test_driving_the_simulated_robot(robot):
     assert abs(state["base_v"]) < 0.02           # let go: stopped
     assert abs(state["qd"][0]) < 0.05
     assert state["odom_x"] > 0.3
+
+
+def test_input_that_stops_changing_is_treated_as_released():
+    from obot.teleop.mapper import InputWatch
+
+    watch = InputWatch(5.0)
+    held = pad(axes=(0, -1, 0, 0), lb=1)
+    assert watch.filter(held, 100.0).pressed(m.BTN_LB)
+    assert watch.filter(held, 104.9).pressed(m.BTN_LB)
+    assert watch.filter(held, 105.1).neutral()               # frozen for over five seconds
+    nudged = pad(axes=(0, -0.9, 0, 0), lb=1)
+    assert watch.filter(nudged, 105.2).pressed(m.BTN_LB)     # any change brings it back
+    assert watch.filter(pad(), 200.0).neutral()              # a resting controller is just neutral
+    assert InputWatch(0).filter(held, 1e9).pressed(m.BTN_LB)  # 0 disables
+
+
+def test_resync_starts_again_from_the_joints():
+    mapper = TeleopMapper(make_info())
+    mapper.step(pad(lb=1), active_state(), 0.02)             # targets taken at q = 0
+    moved = active_state(np.array([0.9, 0, 0, 0]))           # something else moved the arm since
+    out = mapper.step(pad(lb=1), moved, 0.02)
+    assert out.command["q"][0] == pytest.approx(0.9 - mapper.config.max_lead)   # the old target trails
+    mapper.resync()
+    out = mapper.step(pad(lb=1), moved, 0.02)
+    assert out.command["q"][0] == pytest.approx(0.9)
+    # A joint the daemon is holding in position is taken over at its setpoint, not at the
+    # (sagging) measured position.
+    held = active_state(np.array([0.84, 0, 0, 0]))
+    held["joint_mode"][0] = JointMode.POSITION
+    held["q_cmd"][0] = 0.9
+    mapper.resync()
+    assert mapper.step(pad(lb=1), held, 0.02).command["q"][0] == pytest.approx(0.9)

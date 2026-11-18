@@ -99,7 +99,7 @@ def cmd_ui(args) -> int:
 
 def cmd_teleop(args) -> int:
     from .teleop.joystick import Joystick
-    from .teleop.mapper import TeleopMapper
+    from .teleop.mapper import InputWatch, TeleopMapper
 
     tools = config_module.load(args.config)
     joystick = Joystick(args.joystick)
@@ -116,8 +116,9 @@ def cmd_teleop(args) -> int:
         mapper = TeleopMapper(robot.info, tools.teleop, tools.base_v_max, tools.base_omega_max)
         dt = 0.02
         next_tick = time.monotonic()
+        watch = InputWatch(tools.teleop.controller_timeout_s)
         while robot.alive() and joystick.connected:
-            out = mapper.step(joystick.poll(), robot.state(), dt)
+            out = mapper.step(watch.filter(joystick.poll(), time.monotonic()), robot.state(), dt)
             robot.send(out.command, out.request)
             next_tick += dt
             time.sleep(max(0.0, next_tick - time.monotonic()))

@@ -36,6 +36,7 @@ class CubeMarsDriver : public Driver {
     unsigned tx_len() const override { return 8; }
     unsigned rx_len() const override { return 8; }
     bool uses_fd() const override { return false; }
+    void send_failed() override;
 
     // Packing helpers, shared with the simulated device.
     static uint32_t to_uint(float x, float lo, float hi, int bits);
@@ -49,7 +50,8 @@ class CubeMarsDriver : public Driver {
 
  private:
     CubeMarsDriverConfig config_;
-    bool motor_mode_ = false;  // the drive has been told to enter motor mode
+    bool motor_mode_ = false;      // the drive has been told to enter motor mode
+    bool last_was_enter_ = false;  // the last frame made was that request
 };
 
 }  // namespace obot::actuator

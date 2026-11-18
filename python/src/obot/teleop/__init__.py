@@ -1,3 +1,3 @@
-from .mapper import GamepadState, TeleopMapper
+from .mapper import GamepadState, InputWatch, TeleopMapper
 
-__all__ = ["GamepadState", "TeleopMapper"]
+__all__ = ["GamepadState", "InputWatch", "TeleopMapper"]

@@ -85,7 +85,9 @@ any mode and is never displaced by another request.
 - Faults: no status from an actuator for `comm_timeout_cycles` cycles, a drive fault, a
   joint beyond its range by `limit_margin`, velocity above 1.5 x `qd_max`, temperature
   above `temperature_max`, a CAN controller error.
-- Commands with non-finite numbers or unknown modes are refused as a whole.
+- Commands with non-finite numbers, unknown modes or a timestamp in the future are refused
+  as a whole, except that a stop or disable request they carry is still taken.
+- One daemon per shared memory name: a second `obot-rtd` refuses to start.
 - On SIGTERM the drives receive idle commands before the process exits. obot-controller
   drives also fault by themselves when the host stops talking (their host timeout).
 
@@ -146,9 +148,19 @@ Controller layout (Xbox or any controller the browser reports with the standard 
 Without a controller the page takes the keyboard: hold Shift as the deadman, W A S D to
 drive, arrow keys for the arm, Space to disable.
 
-One operator has control at a time, and the page writes commands only while someone is
-operating, so it does not override a policy or script. If the operator's connection drops
-the daemon's command timeout stops the robot.
+One operator has control at a time and keeps it until they have let go of everything for
+a second; the page then stops writing commands, so it does not override a policy or
+script, and the daemon holds the arm where it is. Taking over again starts from what the
+daemon is holding. Stop, disable, enable and clear-faults buttons work from any page or
+controller, whoever is driving. If the operator's connection drops, the daemon's command
+timeout stops the robot.
+
+A controller that drops out without disconnecting (a wireless one out of range or out of
+battery) keeps reporting its last state until the operating system notices, which can take
+seconds. Input that has not changed at all for `controller_timeout_s` (5 s, in `[teleop]`)
+while something is held is therefore treated as released; a wired controller or the Xbox
+wireless adapter, which report a loss at once, are the better choice. This is a
+convenience stop, not a safety function: the robot needs a hardware emergency stop.
 
 Whoever can reach the port can drive the robot. On a network you do not control use
 `obot ui --token SECRET` and open `http://<robot>:8080/?token=SECRET`.

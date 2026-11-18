@@ -86,6 +86,9 @@ class Runtime {
     bool have_command_ = false;
     uint32_t last_request_id_ = 0;
     uint32_t last_estop_id_ = 0;
+    bool seen_command_ = false;  // newest mailbox content examined, accepted or not
+    uint64_t seen_seq_ = 0;
+    bool invalid_pending_ = false;  // that content was refused
     int32_t command_age_us_ = -1;
 
     int clear_burst_ = 0;  // cycles left of sending clear-faults to the drives

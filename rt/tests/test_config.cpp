@@ -121,6 +121,8 @@ TEST_CASE("mistakes are reported with the place they were made") {
     CHECK(error_of(replaced(kGood, "id = 2\nq_min = -1\nq_max = 1\nkp = 20",
                             "id = 2\nq_min = -1\nq_max = 1\nkp_max = 600\nkp = 20"))
               .find("cubemars") != std::string::npos);
+    CHECK(error_of(replaced(kGood, "gear_ratio = 9", "gear_ratio = 9\noutput_encoder = true")).find("output_encoder") !=
+          std::string::npos);
     CHECK(error_of("this is not toml").find("cfg:1") != std::string::npos);
 }
 
