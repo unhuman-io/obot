@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import hmac
 import json
+import os
 import time
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from aiohttp import WSMsgType, web
 from ..client import NotRunning, Request, Robot, describe
 from ..config import ToolsConfig
 from ..teleop.mapper import GamepadState, InputWatch, TeleopMapper, button_request
+from . import model
 
 STATIC = Path(__file__).parent / "static"
 GAMEPAD_TIMEOUT_S = 0.3  # a silent operator is treated as having let go of everything
@@ -100,6 +102,8 @@ class UiServer:
         app.router.add_get("/ws", self._ws)
         app.router.add_get("/camera/{name}.mjpg", self._mjpeg)
         app.router.add_get("/camera/{name}.jpg", self._jpeg)
+        app.router.add_get("/api/model", self._model)
+        app.router.add_get("/model/{path:.*}", self._mesh)
         app.router.add_static("/static", STATIC)
         app.on_startup.append(self._start)
         app.on_cleanup.append(self._stop)
@@ -130,10 +134,22 @@ class UiServer:
             "continuous": [bool(x) for x in info.continuous] if info else [],
             "has_base": bool(info and info.has_base),
             "cameras": list(self.cameras),
+            "model": bool(self.config.urdf and os.path.isfile(self.config.urdf)),
         }
 
     async def _info(self, request: web.Request) -> web.Response:
         return web.json_response(self._info_dict())
+
+    async def _model(self, request: web.Request) -> web.Response:
+        if not self.config.urdf or not os.path.isfile(self.config.urdf):
+            raise web.HTTPNotFound(text="no robot model configured ([model] urdf = ...)")
+        return web.json_response(model.load(self.config.urdf))
+
+    async def _mesh(self, request: web.Request) -> web.FileResponse:
+        path = model.mesh_path(self.config.urdf, request.match_info["path"]) if self.config.urdf else None
+        if path is None:
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Cache-Control": "max-age=3600"})
 
     async def _ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=5)

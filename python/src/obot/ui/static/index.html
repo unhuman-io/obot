@@ -48,6 +48,8 @@
   dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; }
   .keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; color: var(--muted); font-size: 13px; }
   .keys b { color: var(--ink); font-weight: 600; }
+  #model { width: 100%; height: 360px; }
+  #model canvas { display: block; border-radius: 6px; }
   #banner { display: none; padding: 8px 16px; background: var(--bad); color: #fff; }
 </style>
 </head>
@@ -66,10 +68,16 @@
   <button class="stop" data-request="estop">STOP</button>
 </header>
 <main>
+  <div class="side">
   <section>
     <h2>Cameras</h2>
     <div id="cameras" class="cameras"><p class="muted">No cameras configured.</p></div>
   </section>
+  <section id="model-section" style="display:none">
+    <h2>Robot</h2>
+    <div id="model"></div>
+  </section>
+  </div>
   <div class="side">
     <section>
       <h2>Controller</h2>
@@ -80,6 +88,7 @@
         <b>right stick, D-pad</b><span>move the selected arm joints; RB selects the next group</span>
         <b>Start / B</b><span>enable / disable</span>
         <b>Back / Y</b><span>clear faults / emergency stop</span>
+        <b>X</b><span>Cartesian mode: right stick forward / back and roll, D-pad up / down and pitch</span>
         <b>keyboard</b><span>hold Shift as the deadman; W A S D drive, arrow keys move the arm, Space stops</span>
       </div>
     </section>
@@ -99,6 +108,7 @@
     </section>
   </div>
 </main>
+<script type="importmap">{ "imports": { "three": "/static/vendor/three.module.min.js" } }</script>
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
@@ -113,6 +123,12 @@ function fmt(x, digits = 2) { return x === null || x === undefined ? "-" : x.toF
 function showInfo(next) {
   info = next;
   text("robot", info.robot || "obot");
+  if (info.model && !window.obotModelRequested) {
+    window.obotModelRequested = true;
+    $("model-section").style.display = "";
+    import("/static/model.js").then((m) => m.show($("model"), query)).then((view) => { window.obotModel = view; })
+      .catch((e) => { $("model").textContent = "3D view unavailable: " + e; });
+  }
   const cams = $("cameras");
   if (info.cameras.length) {
     cams.replaceChildren(...info.cameras.map((name) => {
@@ -140,8 +156,10 @@ function showInfo(next) {
 }
 
 function showState(s) {
+  if (window.obotModel && s.q) window.obotModel.setJoints(info.joints, s.q, s.odom);
   if (s.status) {
-    text("operator", s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : "");
+    text("operator", (s.status.cartesian ? "Cartesian mode  " : "") +
+         (s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : ""));
     const banner = $("banner");
     const problem = s.status.robot !== "connected" ? "Robot daemon: " + s.status.robot : "";
     banner.style.display = problem ? "block" : "none";

@@ -40,6 +40,11 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
             timeout=10000,
         )
 
+        # The robot is drawn from its URDF and follows the joints.
+        await page.wait_for_function("window.obotModel && window.obotModel.links > 5", timeout=15000)
+        assert await page.locator("#model canvas").count() == 1
+        assert "shoulder_pitch_joint" in await page.evaluate("window.obotModel.joints")
+
         # Buttons are requests.
         await page.click("button[data-request=enable]")
         await page.wait_for_function("document.getElementById('mode').textContent === 'active'", timeout=5000)

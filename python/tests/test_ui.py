@@ -185,3 +185,30 @@ async def test_any_operator_can_stop_the_robot(robot, daemon):
         assert abs(robot.state()["base_v"]) < 0.1             # braked by the idle drives
         await driver.close()
         await bystander.close()
+
+
+async def test_robot_model_is_served(robot, daemon):
+    async with TestClient(TestServer(make_server(daemon).app())) as client:
+        model = await (await client.get("/api/model")).json()
+        assert model["root"] == "base_footprint"
+        joints = {j["name"]: j for j in model["joints"]}
+        assert joints["shoulder_pitch_joint"]["axis"] == [0, -1, 0]
+        assert joints["elbow_pitch_joint"]["xyz"] == [0, 0, 0.25]
+        mesh = model["links"]["upper_arm_link"][0]["mesh"]
+        response = await client.get("/model/" + mesh)
+        assert response.status == 200
+        assert len(await response.read()) > 1000
+        assert (await client.get("/model/../../config/obot3.toml")).status == 404     # stays inside the model
+
+
+def test_depth_is_drawn_in_false_colour():
+    import numpy as np
+
+    from obot.ui.cameras import depth_to_image
+
+    depth = np.array([[0.0, 0.3, 2.0, 9.0]], np.float32)       # no reading, near, mid, beyond range
+    image = depth_to_image(depth)
+    assert image.shape == (1, 4, 3)
+    assert image[0, 0].tolist() == [0, 0, 0]                    # no reading: black
+    assert image[0, 1][2] > image[0, 1][0]                      # near: more red than blue (BGR)
+    assert image[0, 3][0] > image[0, 3][2] or image[0, 3].sum() < 200   # far: cool

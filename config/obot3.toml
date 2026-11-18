@@ -169,14 +169,14 @@ omega_max = 2.0               # rad/s
 
 [[camera]]
 name = "base"
-source = "v4l2:/dev/video0"   # VERIFY
+source = "realsense:color"    # with two D435s: "realsense:<serial>:color"
 width = 640
 height = 480
 fps = 15
 
 [[camera]]
-name = "wrist"
-source = "v4l2:/dev/video6"   # VERIFY
+name = "base depth"
+source = "realsense:depth"
 width = 640
 height = 480
 fps = 15
@@ -191,3 +191,8 @@ joints = ["shoulder_pitch_joint", "elbow_pitch_joint", "wrist_pitch_joint"]
 roll = "wrist_roll_joint"
 lengths = [0.25, 0.22, 0.1308]     # shoulder-elbow, elbow-wrist, wrist-tool flange, m
 zero = [1.5708, 0.0, 0.0]          # upper arm points up, forearm and tool forward
+
+# --- Robot model shown on the operator page (path relative to this file) -----------------
+
+[model]
+urdf = "../description/obot3/obot3.urdf"
