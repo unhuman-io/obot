@@ -1,0 +1,159 @@
+# obot3: differential drive base, 4 joint arm (shoulder pitch, elbow pitch, wrist pitch,
+# wrist roll). Read by obot-rtd, obot-sim-node and the Python tools.
+#
+# Joint names, zero poses, signs and limits follow the URDF exported from the CAD model
+# (obot3_description/obot3.urdf). Everything marked VERIFY is a placeholder that has not
+# been checked against the hardware or the actuator manual yet.
+
+[robot]
+name = "obot3"
+period_us = 1000              # control cycle
+command_timeout_ms = 100      # commands older than this are not followed: the arm holds, the base stops
+comm_timeout_cycles = 5       # consecutive cycles without a status before a joint faults
+max_bus_load = 0.7            # obot-rtd refuses to start if a bus would be busier than this
+
+[rt]
+cpu = 5                       # the isolated core (isolcpus=5 on the image's kernel command line)
+priority = 80                 # SCHED_FIFO
+lock_memory = true
+
+# --- CAN buses -------------------------------------------------------------------------
+# One command and one status per joint per cycle have to fit in the cycle with margin.
+# Worst case on the wire: 8 byte classic frame at 1 Mbit/s = 135 us; obot CAN FD command
+# (48 bytes) + status (64 bytes) at 1 / 5 Mbit/s = 306 us per joint. At 1 kHz that is two
+# joints per bus. `obot-rtd --check --config <file>` prints the numbers for a layout.
+
+[[bus]]
+name = "arm_a"
+interface = "can0"
+fd = false
+bitrate = 1_000_000
+
+[[bus]]
+name = "arm_b"
+interface = "can1"
+fd = false
+bitrate = 1_000_000
+
+[[bus]]
+name = "base"
+interface = "can2"
+fd = true
+bitrate = 1_000_000
+data_bitrate = 5_000_000
+
+# --- Arm -------------------------------------------------------------------------------
+# CubeMars AK60-39 (shoulder, elbow) and AK60-6 (wrist) with their stock drivers in MIT
+# mode. To run them with obot-controller firmware instead, set driver = "obot", put them
+# on a CAN FD bus and fill in gear_ratio / torque_constant.
+#
+# q_min / q_max are the URDF limits (the hard stops) pulled in by 3 degrees.
+
+[[joint]]
+name = "shoulder_pitch_joint"
+bus = "arm_a"
+driver = "cubemars_mit"
+id = 1                        # VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY: set by the homing procedure
+q_min = -1.780
+q_max = 0.733
+qd_max = 2.0                  # rad/s, deliberately far below what the actuator can do
+qdd_max = 8.0
+tau_max = 24.0                # rated torque
+kp = 150.0
+kd = 3.0
+cubemars = { p_max = 12.5, v_max = 10.0, t_max = 72.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-39 manual
+sim = { inertia = 0.5, damping = 0.5, gravity = 19.0 }
+
+[[joint]]
+name = "elbow_pitch_joint"
+bus = "arm_a"
+driver = "cubemars_mit"
+id = 2                        # VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -0.087
+q_max = 3.229
+qd_max = 2.5
+qdd_max = 10.0
+tau_max = 24.0
+kp = 100.0
+kd = 2.0
+cubemars = { p_max = 12.5, v_max = 10.0, t_max = 72.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-39 manual
+sim = { inertia = 0.12, damping = 0.2 }
+
+[[joint]]
+name = "wrist_pitch_joint"
+bus = "arm_b"
+driver = "cubemars_mit"
+id = 3                        # VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.658
+q_max = 1.431
+qd_max = 4.0
+qdd_max = 20.0
+tau_max = 3.0
+kp = 25.0
+kd = 0.5
+cubemars = { p_max = 12.5, v_max = 45.0, t_max = 15.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-6 manual
+sim = { inertia = 0.012, damping = 0.05 }
+
+[[joint]]
+name = "wrist_roll_joint"
+bus = "arm_b"
+driver = "cubemars_mit"
+id = 4                        # VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -2.827
+q_max = 2.827
+qd_max = 4.0
+qdd_max = 20.0
+tau_max = 3.0
+kp = 15.0
+kd = 0.3
+cubemars = { p_max = 12.5, v_max = 45.0, t_max = 15.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-6 manual
+sim = { inertia = 0.003, damping = 0.02 }
+
+# --- Base ------------------------------------------------------------------------------
+# Hub motors with the motor9 controller (obot-controller firmware) inside the wheel.
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "base"
+driver = "obot"
+id = 1                        # VERIFY
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+direction = 1                 # VERIFY
+continuous = true
+qd_max = 12.0                 # rad/s = 1.5 m/s at the tyre
+qdd_max = 20.0
+tau_max = 10.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[[joint]]
+name = "right_wheel_joint"
+bus = "base"
+driver = "obot"
+id = 2                        # VERIFY
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+direction = -1                # VERIFY: the motors are mirrored
+continuous = true
+qd_max = 12.0
+qdd_max = 20.0
+tau_max = 10.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[base]
+left = "left_wheel_joint"
+right = "right_wheel_joint"
+wheel_radius = 0.125          # m, 250 mm tyre
+track_width = 0.38756         # m, between tyre centres
+v_max = 0.8                   # m/s
+omega_max = 2.0               # rad/s

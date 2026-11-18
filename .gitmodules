@@ -1,0 +1,3 @@
+[submodule "rt/third_party/motor_messages"]
+	path = rt/third_party/motor_messages
+	url = ../motor_messages
