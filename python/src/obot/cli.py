@@ -6,6 +6,7 @@
     obot ui                     operator web page: cameras, state, gamepad driving
     obot teleop                 drive with a controller plugged into the robot, no web page
     obot record out.mcap        log every state record to an MCAP file
+    obot viz                    live plots in the Rerun viewer
 """
 
 from __future__ import annotations
@@ -133,6 +134,13 @@ def cmd_record(args) -> int:
         return record(robot, args.output, duration=args.duration, decimate=args.decimate)
 
 
+def cmd_viz(args) -> int:
+    from .viz import run
+
+    with _robot(args) as robot:
+        return run(robot, save=args.save, connect=args.connect, urdf=args.urdf, duration=args.duration)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="obot", description=__doc__.split("\n")[0])
     parser.add_argument("--config", help="robot configuration (default: $OBOT_CONFIG or /etc/obot/robot.toml)")
@@ -164,6 +172,13 @@ def main(argv: list[str] | None = None) -> int:
     rec.add_argument("--duration", type=float, help="seconds (default: until interrupted)")
     rec.add_argument("--decimate", type=int, default=1, help="keep every Nth record")
     rec.set_defaults(func=cmd_record)
+
+    viz = sub.add_parser("viz", help="live plots in the Rerun viewer")
+    viz.add_argument("--save", help="write a .rrd recording instead of opening a viewer")
+    viz.add_argument("--connect", help="stream to a viewer at this URL")
+    viz.add_argument("--urdf", help="robot model to show (logged once)")
+    viz.add_argument("--duration", type=float, help="seconds (default: until interrupted)")
+    viz.set_defaults(func=cmd_viz)
 
     args = parser.parse_args(argv)
     try:

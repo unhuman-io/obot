@@ -79,9 +79,9 @@ jobs:
           ip -brief link
       - name: Install
         run: pip install -e "python[ui,log,dev]"
-      - name: Browser for the operator page test
+      - name: Browser for the operator page test, Rerun for the plotting test
         if: matrix.python == '3.13'
-        run: pip install playwright && playwright install --with-deps chromium-headless-shell
+        run: pip install playwright rerun-sdk && playwright install --with-deps chromium-headless-shell
       - name: Lint
         run: ruff check python
       - name: Test

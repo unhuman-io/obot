@@ -14,7 +14,7 @@ dependencies = ["numpy>=1.22", "tomli>=2; python_version < '3.11'"]
 [project.optional-dependencies]
 ui = ["aiohttp>=3.9", "opencv-python-headless>=4.8"]
 log = ["mcap>=1.1", "protobuf>=4.25"]
-viz = ["rerun-sdk>=0.20"]
+viz = ["rerun-sdk>=0.23; python_version >= '3.11'"]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
 all = ["obot[ui,log,viz]"]
 

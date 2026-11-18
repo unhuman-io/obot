@@ -130,6 +130,7 @@ obot ui --joystick          # the same, and also accept a controller plugged int
 obot teleop                 # only a controller on the robot, no web page
 obot status | watch | enable | disable | clear | stop
 obot record run.mcap        # every state record; opens in Foxglove, PlotJuggler, Rerun
+obot viz                    # live plots of every joint and the control loop in the Rerun viewer
 ```
 
 Controller layout (Xbox or any controller the browser reports with the standard mapping):
