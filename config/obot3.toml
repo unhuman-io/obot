@@ -19,21 +19,23 @@ lock_memory = true
 
 # --- CAN buses -------------------------------------------------------------------------
 # One command and one status per joint per cycle have to fit in the cycle with margin.
-# Worst case on the wire: 8 byte classic frame at 1 Mbit/s = 135 us; obot CAN FD command
-# (48 bytes) + status (64 bytes) at 1 / 5 Mbit/s = 306 us per joint. At 1 kHz that is two
-# joints per bus. `obot-rtd --check --config <file>` prints the numbers for a layout.
+# Worst case on the wire for an obot joint (48 byte command + 64 byte status, CAN FD):
+# 307 us at 1 / 5 Mbit/s, 218 us at 1 / 8 Mbit/s. At 1 kHz and 70 % load that is two joints
+# per bus at 5 Mbit/s and three at 8 Mbit/s. `obot-rtd --check --config <file>` prints the numbers for a layout.
 
 [[bus]]
 name = "arm_a"
 interface = "can0"
-fd = false
+fd = true
 bitrate = 1_000_000
+data_bitrate = 5_000_000
 
 [[bus]]
 name = "arm_b"
 interface = "can1"
-fd = false
+fd = true
 bitrate = 1_000_000
+data_bitrate = 5_000_000
 
 [[bus]]
 name = "base"
@@ -43,17 +45,18 @@ bitrate = 1_000_000
 data_bitrate = 5_000_000
 
 # --- Arm -------------------------------------------------------------------------------
-# CubeMars AK60-39 (shoulder, elbow) and AK60-6 (wrist) with their stock drivers in MIT
-# mode. To run them with obot-controller firmware instead, set driver = "obot", put them
-# on a CAN FD bus and fill in gear_ratio / torque_constant.
+# CubeMars AK60-39 (shoulder, elbow) and AK60-6 (wrist) motors with obot driver boards:
+# the same CAN FD protocol as the wheels (motor-realtime's MotorCAN).
 #
 # q_min / q_max are the URDF limits (the hard stops) pulled in by 3 degrees.
 
 [[joint]]
 name = "shoulder_pitch_joint"
 bus = "arm_a"
-driver = "cubemars_mit"
+driver = "obot"
 id = 1                        # VERIFY
+gear_ratio = 39.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
 direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY: set by the homing procedure
 q_min = -1.780
@@ -63,14 +66,15 @@ qdd_max = 8.0
 tau_max = 24.0                # rated torque
 kp = 150.0
 kd = 3.0
-cubemars = { p_max = 12.5, v_max = 10.0, t_max = 72.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-39 manual
 sim = { inertia = 0.5, damping = 0.5, gravity = 19.0 }
 
 [[joint]]
 name = "elbow_pitch_joint"
 bus = "arm_a"
-driver = "cubemars_mit"
+driver = "obot"
 id = 2                        # VERIFY
+gear_ratio = 39.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
 direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -0.087
@@ -80,14 +84,15 @@ qdd_max = 10.0
 tau_max = 24.0
 kp = 100.0
 kd = 2.0
-cubemars = { p_max = 12.5, v_max = 10.0, t_max = 72.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-39 manual
 sim = { inertia = 0.12, damping = 0.2 }
 
 [[joint]]
 name = "wrist_pitch_joint"
 bus = "arm_b"
-driver = "cubemars_mit"
+driver = "obot"
 id = 3                        # VERIFY
+gear_ratio = 6.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
 direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.658
@@ -97,14 +102,15 @@ qdd_max = 20.0
 tau_max = 3.0
 kp = 25.0
 kd = 0.5
-cubemars = { p_max = 12.5, v_max = 45.0, t_max = 15.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-6 manual
 sim = { inertia = 0.012, damping = 0.05 }
 
 [[joint]]
 name = "wrist_roll_joint"
 bus = "arm_b"
-driver = "cubemars_mit"
+driver = "obot"
 id = 4                        # VERIFY
+gear_ratio = 6.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
 direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -2.827
@@ -114,7 +120,6 @@ qdd_max = 20.0
 tau_max = 3.0
 kp = 15.0
 kd = 0.3
-cubemars = { p_max = 12.5, v_max = 45.0, t_max = 15.0, kp_max = 500.0, kd_max = 5.0 }   # VERIFY against the AK60-6 manual
 sim = { inertia = 0.003, damping = 0.02 }
 
 # --- Base ------------------------------------------------------------------------------
@@ -175,3 +180,14 @@ source = "v4l2:/dev/video6"   # VERIFY
 width = 640
 height = 480
 fps = 15
+
+# --- Arm geometry, for Cartesian teleoperation (read by the Python side) -----------------
+# Three pitch joints in one plane, then roll. Angles are measured in the arm's plane from
+# forward (x) towards up (z); `zero` is each link's direction with all joints at 0.
+
+[arm]
+type = "planar3r"
+joints = ["shoulder_pitch_joint", "elbow_pitch_joint", "wrist_pitch_joint"]
+roll = "wrist_roll_joint"
+lengths = [0.25, 0.22, 0.1308]     # shoulder-elbow, elbow-wrist, wrist-tool flange, m
+zero = [1.5708, 0.0, 0.0]          # upper arm points up, forearm and tool forward

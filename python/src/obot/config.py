@@ -37,6 +37,16 @@ class TeleopConfig:
     # is treated as released (a wireless controller that dropped out keeps reporting its last
     # state until the OS notices). Costs a re-press on long steady moves; 0 disables.
     controller_timeout_s: float = 5.0
+    cartesian_speed: float = 0.15  # tool speed at full stick in Cartesian mode, m/s
+    pitch_speed: float = 0.8  # tool pitch rate in Cartesian mode, rad/s
+
+
+@dataclass
+class ArmConfig:
+    joints: list[str]
+    lengths: list[float]
+    zero: list[float]
+    roll: str | None = None
 
 
 @dataclass
@@ -46,6 +56,8 @@ class ToolsConfig:
     base_omega_max: float = 1.5
     cameras: list[CameraConfig] = field(default_factory=list)
     teleop: TeleopConfig = field(default_factory=TeleopConfig)
+    arm: ArmConfig | None = None
+    urdf: str | None = None  # robot model for the operator page, [model] urdf = "..."
 
 
 def find_config(path: str | None = None) -> str | None:
@@ -73,8 +85,16 @@ def load(path: str | None = None) -> ToolsConfig:
     for entry in doc.get("camera", []):
         known = {k: entry[k] for k in ("name", "source", "width", "height", "fps", "quality") if k in entry}
         config.cameras.append(CameraConfig(**known))
+    arm = doc.get("arm")
+    if arm and arm.get("type") == "planar3r":
+        config.arm = ArmConfig(list(arm["joints"]), [float(v) for v in arm["lengths"]],
+                               [float(v) for v in arm["zero"]], arm.get("roll"))
+    model = doc.get("model", {})
+    if "urdf" in model:
+        config.urdf = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(found)), model["urdf"]))
     teleop = doc.get("teleop", {})
-    for key in ("base_speed", "arm_speed", "deadband", "max_lead", "controller_timeout_s"):
+    for key in ("base_speed", "arm_speed", "deadband", "max_lead", "controller_timeout_s", "cartesian_speed",
+                "pitch_speed"):
         if key in teleop:
             setattr(config.teleop, key, float(teleop[key]))
     return config

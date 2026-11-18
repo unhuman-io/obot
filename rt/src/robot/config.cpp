@@ -73,7 +73,7 @@ const toml::table* subtable(const Ctx& ctx, const toml::table& table, const std:
 RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
     RobotConfig c;
     // [[camera]] and [teleop] belong to the operator tools (python/); they are not read here.
-    check_keys(ctx, root, "top level", {"robot", "rt", "bus", "joint", "base", "camera", "teleop"});
+    check_keys(ctx, root, "top level", {"robot", "rt", "bus", "joint", "base", "camera", "teleop", "arm", "model"});
 
     if (const auto* t = subtable(ctx, root, "top level", "robot")) {
         check_keys(ctx, *t, "[robot]",

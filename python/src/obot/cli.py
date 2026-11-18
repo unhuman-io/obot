@@ -113,7 +113,7 @@ def cmd_teleop(args) -> int:
             time.sleep(0.05)
         return 1
     with Robot(args.shm_name or tools.shm_name) as robot:
-        mapper = TeleopMapper(robot.info, tools.teleop, tools.base_v_max, tools.base_omega_max)
+        mapper = TeleopMapper(robot.info, tools.teleop, tools.base_v_max, tools.base_omega_max, tools.arm)
         dt = 0.02
         next_tick = time.monotonic()
         watch = InputWatch(tools.teleop.controller_timeout_s)

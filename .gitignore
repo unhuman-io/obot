@@ -6,8 +6,6 @@ __pycache__/
 .ruff_cache/
 *.mcap
 *.rrd
-# CAD exports (meshes) are not kept in this repository; see description/README.md
-description/obot3/meshes/
 # Yocto / kas work directories
 os/build/
 os/.kas*

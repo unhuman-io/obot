@@ -220,7 +220,7 @@ class UiServer:
             self.status["robot"] = str(e)
             return
         self.mapper = TeleopMapper(self.robot.info, self.config.teleop, self.config.base_v_max,
-                                   self.config.base_omega_max)
+                                   self.config.base_omega_max, self.config.arm)
         self.status["robot"] = "connected"
 
     def _poll_joystick(self) -> None:
@@ -303,7 +303,8 @@ class UiServer:
             request = self._next_request()
             if operator is not None or request != Request.NONE:
                 self.robot.send(out.command, request)
-            self.status.update(operator=operator.label if operator else None, group=out.group, moving=out.moving)
+            self.status.update(operator=operator.label if operator else None, group=out.group, moving=out.moving,
+                               cartesian=out.cartesian)
 
             if tick % (TICK_HZ // STATE_HZ) == 0 and state is not None:
                 cameras = {name: {"age": None if c.age == float("inf") else round(c.age, 2), "error": c.error}
