@@ -49,6 +49,8 @@
   .keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; color: var(--muted); font-size: 13px; }
   .keys b { color: var(--ink); font-weight: 600; }
   #model { width: 100%; height: 360px; }
+  .simcam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
+  .simcam canvas { display: block; width: 100%; height: 100%; }
   #model canvas { display: block; border-radius: 6px; }
   #banner { display: none; padding: 8px 16px; background: var(--bad); color: #fff; }
 </style>
@@ -126,12 +128,21 @@ function showInfo(next) {
   if (info.model && !window.obotModelRequested) {
     window.obotModelRequested = true;
     $("model-section").style.display = "";
-    import("/static/model.js").then((m) => m.show($("model"), query)).then((view) => { window.obotModel = view; })
+    import("/static/model.js").then((m) => m.show($("model"), query, simCameras)).then((view) => { window.obotModel = view; })
       .catch((e) => { $("model").textContent = "3D view unavailable: " + e; });
   }
   const cams = $("cameras");
-  if (info.cameras.length) {
-    cams.replaceChildren(...info.cameras.map((name) => {
+  const simCameras = info.sim_cameras || [];
+  if (info.cameras.length || simCameras.length) {
+    cams.replaceChildren(...simCameras.map((cam) => {
+      const figure = document.createElement("figure");
+      cam.element = document.createElement("div");
+      cam.element.className = "simcam";
+      const caption = document.createElement("figcaption");
+      caption.textContent = cam.name + " (simulated)";
+      figure.append(cam.element, caption);
+      return figure;
+    }), ...info.cameras.map((name) => {
       const figure = document.createElement("figure");
       const img = document.createElement("img");
       img.alt = name + " camera";

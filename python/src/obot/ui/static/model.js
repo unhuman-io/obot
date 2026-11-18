@@ -11,7 +11,62 @@ function frame(origin) {
   return group;
 }
 
-export async function show(container, query) {
+// Something to look at for the simulated cameras: a floor and a few household-sized props.
+// They are on layer 1, which only the simulated cameras see, so the overview stays clear.
+function addProps(scene) {
+  const prop = (geometry, color, x, y, z) => {
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color, roughness: 0.8 }));
+    mesh.position.set(x, y, z);
+    mesh.layers.set(1);
+    scene.add(mesh);
+    return mesh;
+  };
+  prop(new THREE.PlaneGeometry(12, 12), 0xb9b2a6, 0, 0, 0);                          // floor
+  prop(new THREE.BoxGeometry(0.4, 0.6, 0.45), 0x8a6f52, 1.6, 0.9, 0.225);            // a box
+  prop(new THREE.CylinderGeometry(0.15, 0.18, 0.4, 24), 0x3f7fbf, 1.3, -0.8, 0.2).rotation.x = Math.PI / 2;  // a basket
+  prop(new THREE.SphereGeometry(0.12, 24, 12), 0xc94f4f, 0.9, 0.25, 0.04).scale.set(1.4, 1, 0.35);   // a shirt on the floor
+  prop(new THREE.SphereGeometry(0.1, 24, 12), 0x4faf6a, 1.1, -0.3, 0.03).scale.set(1, 1.5, 0.3);     // a sock
+  prop(new THREE.BoxGeometry(0.1, 6, 1.5), 0xd8d4cc, 4.5, 0, 0.75);                  // a wall
+}
+
+// Distance along the viewing direction as colour: near is warm, far is cool, like the real
+// depth stream is drawn; beyond the range is black.
+const depthMaterial = new THREE.ShaderMaterial({
+  uniforms: { range: { value: 4.0 } },
+  vertexShader: "varying float d; void main() { vec4 p = modelViewMatrix * vec4(position, 1.0); d = -p.z; gl_Position = projectionMatrix * p; }",
+  fragmentShader: `uniform float range; varying float d;
+    void main() {
+      float t = clamp(d / range, 0.0, 1.0);
+      vec3 c = clamp(vec3(1.5 - abs(4.0 * t - 1.0), 1.5 - abs(4.0 * t - 2.0), 1.5 - abs(4.0 * t - 3.0)), 0.0, 1.0);
+      gl_FragColor = vec4(d > range ? vec3(0.0) : c, 1.0);
+    }`,
+});
+
+// A view from a URDF link whose x axis is the viewing direction and z is up, as a colour
+// or a depth picture (range 0.1 .. 4 m).
+function addSimCamera(scene, link, cam) {
+  const depth = cam.mode === "depth";
+  // RealSense D435 vertical fields of view.
+  const camera = new THREE.PerspectiveCamera(depth ? 58 : 42, 4 / 3, depth ? 0.1 : 0.02, depth ? 4 : 30);
+  camera.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)));
+  camera.layers.enable(1);
+  link.add(camera);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(480, 360, false);
+  cam.element.replaceChildren(renderer.domElement);
+  const background = new THREE.Color(depth ? 0x000000 : 0xcfd8e3);
+  return () => {
+    const savedBackground = scene.background;
+    scene.background = background;
+    scene.overrideMaterial = depth ? depthMaterial : null;
+    renderer.render(scene, camera);
+    scene.overrideMaterial = null;
+    scene.background = savedBackground;
+  };
+}
+
+export async function show(container, query, simCameras = []) {
   const model = await (await fetch("/api/model" + query)).json();
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 50);
@@ -70,10 +125,21 @@ export async function show(container, query) {
   }
   new ResizeObserver(resize).observe(container);
   resize();
-  renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+  const views = [];
+  if (simCameras.length) addProps(scene);
+  for (const cam of simCameras) {
+    if (links[cam.link] && cam.element) views.push(addSimCamera(scene, links[cam.link], cam));
+  }
+  let tick = 0;
+  renderer.setAnimationLoop(() => {
+    controls.update();
+    renderer.render(scene, camera);
+    if (tick++ % 2 === 0) views.forEach((draw) => draw());   // camera views at half the display rate
+  });
 
   return {
     links: Object.keys(links).length,
+    views: views.length,
     joints: Object.keys(moving),
     setJoints(names, q, odom) {
       names.forEach((name, i) => {

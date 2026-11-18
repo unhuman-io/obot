@@ -88,6 +88,12 @@ def cmd_ui(args) -> int:
         tools.shm_name = args.shm_name
     if args.test_camera:
         tools.cameras = [config_module.CameraConfig(name="test", source="test")]
+    if args.sim_cameras:
+        tools.cameras = [
+            config_module.CameraConfig(name=f"{where} {mode}", source=f"sim:{link}:{mode}")
+            for where, link in (("base", "base_camera_link"), ("gripper", "wrist_camera_link"))
+            for mode in ("color", "depth")
+        ]
     where = f"http://{'<this machine>' if args.host == '0.0.0.0' else args.host}:{args.port}/"
     print(f"obot ui: {where}{'?token=...' if args.token else ''}", file=sys.stderr)
     if not args.token and args.host == "0.0.0.0":
@@ -161,6 +167,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="also accept a controller connected to this machine (default device: first found)")
     ui.add_argument("--no-cameras", action="store_true")
     ui.add_argument("--test-camera", action="store_true", help="show a test pattern instead of real cameras")
+    ui.add_argument("--sim-cameras", action="store_true",
+                    help="simulated base and gripper cameras (colour and depth) rendered from the robot model")
     ui.set_defaults(func=cmd_ui)
 
     teleop = sub.add_parser("teleop", help="drive with a controller connected to this machine")

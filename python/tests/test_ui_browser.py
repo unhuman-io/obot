@@ -13,10 +13,17 @@ from aiohttp.test_utils import TestServer  # noqa: E402
 from test_ui import make_server  # noqa: E402
 
 from obot import RobotMode  # noqa: E402
+from obot.config import CameraConfig  # noqa: E402
 
 
 async def test_page_shows_the_robot_and_drives_it(robot, daemon):
-    server = TestServer(make_server(daemon).app())
+    ui = make_server(daemon)
+    ui.config.cameras += [
+        CameraConfig(name=f"{where} {mode}", source=f"sim:{link}:{mode}")
+        for where, link in (("base", "base_camera_link"), ("gripper", "wrist_camera_link"))
+        for mode in ("color", "depth")
+    ]
+    server = TestServer(ui.app())
     await server.start_server()
     errors = []
     async with playwright_api.async_playwright() as p:
@@ -43,6 +50,9 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
         # The robot is drawn from its URDF and follows the joints.
         await page.wait_for_function("window.obotModel && window.obotModel.links > 5", timeout=15000)
         assert await page.locator("#model canvas").count() == 1
+        # Simulated base and gripper cameras, colour and depth, drawn from the same model.
+        assert await page.evaluate("window.obotModel.views") == 4
+        assert await page.locator(".simcam canvas").count() == 4
         assert "shoulder_pitch_joint" in await page.evaluate("window.obotModel.joints")
 
         # Buttons are requests.

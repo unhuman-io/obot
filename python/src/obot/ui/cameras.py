@@ -3,6 +3,9 @@ its newest frame as a JPEG, so a slow viewer never builds up a queue.
 
 Sources:
     test                        a moving test pattern (no hardware)
+    sim:<link>:color            what a camera on that URDF link would see of the robot model
+    sim:<link>:depth            and a few props, drawn by the operator page itself (needs
+                                [model]); for trying the page without cameras
     v4l2:/dev/video0            a V4L2 device: USB cameras, RealSense colour streams
     realsense:color             an Intel RealSense (D435, ...) through librealsense
     realsense:depth             (pip install pyrealsense2): the colour image, or the depth

@@ -134,6 +134,10 @@ class UiServer:
             "continuous": [bool(x) for x in info.continuous] if info else [],
             "has_base": bool(info and info.has_base),
             "cameras": list(self.cameras),
+            "sim_cameras": [
+                {"name": c.name, "link": c.source.split(":")[1], "mode": (c.source.split(":") + ["color"])[2]}
+                for c in self.config.cameras if c.source.startswith("sim:") and self.enable_cameras
+            ],
             "model": bool(self.config.urdf and os.path.isfile(self.config.urdf)),
         }
 
@@ -217,7 +221,8 @@ class UiServer:
             from .cameras import Camera
 
             for camera_config in self.config.cameras:
-                self.cameras[camera_config.name] = Camera(camera_config)
+                if not camera_config.source.startswith("sim:"):   # those are drawn by the page
+                    self.cameras[camera_config.name] = Camera(camera_config)
         self._task = asyncio.create_task(self._loop())
 
     async def _stop(self, app: web.Application) -> None:
