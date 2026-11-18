@@ -11,9 +11,10 @@ Sources:
     realsense:depth             (pip install pyrealsense2): the colour image, or the depth
     realsense:<serial>:depth    image drawn in false colour, near = warm. Add the serial
                                 number when more than one camera is connected.
-    gst:<pipeline>              a GStreamer pipeline ending in appsink, e.g. a CSI camera on
-                                a Jetson: gst:nvarguscamerasrc ! nvvidconv ! video/x-raw,
-                                format=BGRx ! videoconvert ! video/x-raw,format=BGR ! appsink
+    gst:<pipeline>              a GStreamer pipeline that ends in a JPEG encoder, run with
+                                gst-launch-1.0. A CSI camera on a Jetson Nano:
+                                gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,
+                                height=720,framerate=15/1 ! nvjpegenc
 """
 
 from __future__ import annotations
@@ -77,6 +78,37 @@ def depth_to_image(depth_m: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
     return image
 
 
+class _GstJpeg:
+    """JPEG frames from a gst-launch-1.0 pipeline writing to its standard output."""
+
+    def __init__(self, pipeline: str):
+        import shlex
+        import subprocess
+
+        self._process = subprocess.Popen(
+            ["gst-launch-1.0", "-q", *shlex.split(pipeline), "!", "fdsink", "fd=1"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        self._buffer = b""
+
+    def read_jpeg(self) -> bytes:
+        """The next complete JPEG (start marker FFD8 to end marker FFD9)."""
+        while True:
+            start = self._buffer.find(b"\xff\xd8")
+            end = self._buffer.find(b"\xff\xd9", start + 2) if start >= 0 else -1
+            if end >= 0:
+                frame, self._buffer = self._buffer[start : end + 2], self._buffer[end + 2 :]
+                return frame
+            chunk = self._process.stdout.read1(1 << 16)
+            if not chunk:
+                raise OSError("gst-launch-1.0 ended")
+            self._buffer += chunk
+
+    def release(self) -> None:
+        self._process.kill()
+        self._process.wait()
+
+
 class Camera:
     def __init__(self, config: CameraConfig):
         import cv2  # imported here so the rest of the package works without OpenCV
@@ -119,7 +151,7 @@ class Camera:
             cap.set(cv2.CAP_PROP_FPS, c.fps)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         elif c.source.startswith("gst:"):
-            cap = cv2.VideoCapture(c.source[4:], cv2.CAP_GSTREAMER)
+            return _GstJpeg(c.source[4:])
         else:
             raise ValueError(f"camera {c.name}: unknown source '{c.source}'")
         if not cap.isOpened():
@@ -152,6 +184,13 @@ class Camera:
                 start = time.monotonic()
                 if c.source == "test":
                     frame = self._test_frame(start)
+                elif c.source.startswith("gst:"):
+                    jpeg = cap.read_jpeg()   # already encoded: publish as it is
+                    with self._lock:
+                        self._jpeg = jpeg
+                        self._sequence += 1
+                        self._stamp = time.monotonic()
+                    continue
                 elif c.source.startswith("realsense"):
                     parts = c.source.split(":")[1:]
                     stream = parts[-1] if parts and parts[-1] in ("color", "depth") else "color"

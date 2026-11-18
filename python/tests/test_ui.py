@@ -212,3 +212,24 @@ def test_depth_is_drawn_in_false_colour():
     assert image[0, 0].tolist() == [0, 0, 0]                    # no reading: black
     assert image[0, 1][2] > image[0, 1][0]                      # near: more red than blue (BGR)
     assert image[0, 3][0] > image[0, 3][2] or image[0, 3].sum() < 200   # far: cool
+
+
+def test_gstreamer_jpeg_stream_is_split_into_frames(monkeypatch):
+    import io
+    import subprocess
+
+    from obot.ui import cameras
+
+    frames = [b"\xff\xd8" + bytes([i]) * 50 + b"\xff\xd9" for i in range(3)]
+
+    class FakeProcess:
+        stdout = io.BufferedReader(io.BytesIO(b"".join(frames)), buffer_size=16)   # arrives in small pieces
+
+        def kill(self): ...
+        def wait(self): ...
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProcess())
+    source = cameras._GstJpeg("videotestsrc ! jpegenc")
+    assert [source.read_jpeg() for _ in range(3)] == frames
+    with pytest.raises(OSError):
+        source.read_jpeg()

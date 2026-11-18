@@ -31,6 +31,10 @@ uv venv --python 3.12 ~/obot-venv && uv pip install -p ~/obot-venv ~/obot-python
 ~/obot-venv/bin/obot ui --test-camera        # http://<robot>:8080/ from any browser
 ```
 
+To keep the page running, install `deploy/obot-ui.service` with `OBOT_USER` replaced by
+that user (`sed s/OBOT_USER/$USER/g deploy/obot-ui.service | sudo tee
+/etc/systemd/system/obot-ui.service`, then `sudo systemctl enable --now obot-ui`).
+
 ## From the CI artifact
 
 ```sh

@@ -160,7 +160,6 @@ sim = { inertia = 0.01, damping = 0.05 }
 
 [[camera]]
 name = "front"
-source = "v4l2:/dev/video0"
-width = 640
-height = 480
+# The CSI camera on the Jetson Nano, through NVIDIA's camera source and JPEG encoder.
+source = "gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=15/1 ! nvjpegenc"
 fps = 15
