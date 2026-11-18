@@ -9,3 +9,7 @@ local_conf_header:
     PARALLEL_MAKE ?= "-j 8"
     BB_PRESSURE_MAX_MEMORY ?= "20000"
     INHERIT += "rm_work"
+    # Fetch only the revisions that are built, not whole histories: the kernel repository
+    # alone is several GB and its full clone needs more memory than the build itself.
+    BB_GIT_SHALLOW ?= "1"
+    BB_GIT_SHALLOW_DEPTH ?= "1"
