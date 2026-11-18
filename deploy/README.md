@@ -8,38 +8,47 @@ programs as the artifact `obot-rt-aarch64-static`.
 
 ```sh
 sudo apt install cmake ninja-build g++-aarch64-linux-gnu
-deploy/deploy.sh user@robot config/obot1.toml 3          # control thread on CPU 3
-deploy/deploy.sh user@jetson config/obot1.toml -1 --sim  # a board with nothing connected
+deploy/deploy.sh --cpu 3 --isolate --reboot user@robot config/obot1.toml
+deploy/deploy.sh --cpu 3 --isolate --reboot --sim --force-config user@spare config/obot1.toml
+deploy/deploy.sh --jump user@gateway --sim user@behind-it config/obot1.toml
+deploy/deploy.sh --verify-only --cpu 3 --isolate user@robot config/obot1.toml
 ```
 
-The script prints what the board is (model, L4T release, kernel, Python), cross-compiles
-statically linked programs, copies them with the robot description and model, and installs
-and starts `obot-rtd.service`. With `--sim` the service runs on simulated actuators, so a
-bare Jetson can be used to try the daemon, the operator page and deployment itself.
+One command builds statically linked programs, installs them with the robot description,
+the Python tools and both services (`obot-rtd`, `obot-ui`), and then runs the checks in
+`verify.sh` on the robot; its exit status is the result. Running it again is safe.
 
-The operator tools need Python 3.10 or newer, which L4T R32 (Ubuntu 18.04) does not have.
-[uv](https://docs.astral.sh/uv/) brings its own:
+| option | |
+|---|---|
+| `--cpu N` | CPU for the control thread |
+| `--isolate`, `--reboot` | put `isolcpus=N nohz_full=N rcu_nocbs=N` on the kernel command line (`/boot/extlinux/extlinux.conf`, original kept as `.before-obot`) and reboot if that changed |
+| `--sim` | simulated actuators: for a board with nothing connected |
+| `--force-config` | replace the robot's `/etc/obot/robot.toml` (otherwise an existing one is kept and the new one is left beside it as `robot.toml.new`) |
+| `--jump HOST` | reach the robot through another ssh host |
+| `--no-tools` | daemon only |
+| `--verify-only` | change nothing, run the checks |
 
-```sh
-# on the robot, once; then log out and in for the group to take effect
-curl -LsSf https://astral.sh/uv/install.sh | sh
-sudo usermod -aG obot $USER
-# from the development machine
-scp -r python user@robot:obot-python
-# on the robot
-uv venv --python 3.12 ~/obot-venv && uv pip install -p ~/obot-venv ~/obot-python'[ui,log]'
-~/obot-venv/bin/obot ui --test-camera        # http://<robot>:8080/ from any browser
-```
+The robot needs ssh with a key and passwordless sudo for the login user, and internet
+access the first time (the tools bring their own Python 3.12 through
+[uv](https://docs.astral.sh/uv/), since L4T R32 has Python 3.6). The checks: services
+active, realtime priority, the control thread on its CPU, that CPU isolated, the operator
+page answering, and ten seconds of the control loop with no overruns and no wake-up later
+than 1 ms. A kernel without PREEMPT_RT is reported as a warning.
 
-To keep the page running, install `deploy/obot-ui.service` with `OBOT_USER` replaced by
-that user (`sed s/OBOT_USER/$USER/g deploy/obot-ui.service | sudo tee
-/etc/systemd/system/obot-ui.service`, then `sudo systemctl enable --now obot-ui`).
+Tried on two Jetson Nano developer kits: L4T R32.5.0 with a 4.9-rt kernel, and stock
+L4T R32.4.4 (not realtime); on both the worst wake-up in the ten seconds was about 20 us
+on an idle board.
+
+`.github/workflows/deploy-test.yml` runs the same command from a self-hosted runner on
+the robots' network (label `obot-lab`), against the board named in the repository
+variable `DEPLOY_TEST_TARGET`.
 
 ## From the CI artifact
 
 ```sh
 tar -xzf obot-rt-aarch64-static.tar.gz && cd obot-rt-aarch64
-sudo ./install.sh config/obot1.toml 3      # robot description, CPU for the control thread
+cp config/obot1.toml robot.toml && cp -r ../description . 2>/dev/null
+sudo OBOT_CPU=3 OBOT_TOOLS=0 sh ./remote-install.sh
 obot-rtd --check --config /etc/obot/robot.toml
 sudo systemctl start obot-rtd && journalctl -u obot-rtd -f
 ```

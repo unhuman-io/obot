@@ -111,6 +111,7 @@ jobs:
           cp rt/build/release/obot-rtd rt/build/release/obot-sim-node rt/build/release/obot-rt-latency dist/obot-rt-aarch64/bin/
           cp config/*.toml dist/obot-rt-aarch64/config/
           cp deploy/* dist/obot-rt-aarch64/
+          cp -r description dist/obot-rt-aarch64/
           file dist/obot-rt-aarch64/bin/obot-rtd
           tar -C dist -czf obot-rt-aarch64-static.tar.gz obot-rt-aarch64
       - uses: actions/upload-artifact@v4
