@@ -1,7 +1,8 @@
 name: CI
+# Every push runs CI; a pull request shows the runs of its head commit.
 on:
   push:
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
