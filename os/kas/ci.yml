@@ -13,3 +13,5 @@ local_conf_header:
     # alone is several GB and its full clone needs more memory than the build itself.
     BB_GIT_SHALLOW ?= "1"
     BB_GIT_SHALLOW_DEPTH ?= "1"
+    # These take their version from git tags, which a shallow fetch does not carry.
+    BB_GIT_SHALLOW:pn-libnvidia-container = "0"
