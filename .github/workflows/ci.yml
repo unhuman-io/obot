@@ -41,6 +41,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Deployment scripts
+        run: |
+          for f in deploy/*.sh deploy/tests/*.sh; do sh -n "$f"; done
+          sh deploy/tests/test-firmware-update.sh
       - name: clang-format
         run: |
           pipx install clang-format==21.1.8

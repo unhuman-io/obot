@@ -9,13 +9,16 @@
 #   --sim            run on simulated actuators (a board with nothing connected)
 #   --force-config   replace the robot's existing /etc/obot/robot.toml
 #   --no-tools       daemon only: no Python tools, no operator page
+#   --firmware BOARD=PACKAGE.tgz
+#                    load this obot-controller firmware package onto the motor board with
+#                    that name or serial number, unless it already runs it (repeatable)
 #   --jump HOST      reach the robot through this ssh host
 #   --verify-only    change nothing, only run the checks
 #
 # Needs here: cmake, ninja, g++-aarch64-linux-gnu. On the robot: ssh with a key and
 # passwordless sudo. Running it again is safe. Exit status is that of the checks.
 set -eu
-cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0
+cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0 firmware=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --cpu) cpu="$2"; shift 2 ;;
@@ -25,6 +28,7 @@ while [ $# -gt 0 ]; do
         --force-config) force=1; shift ;;
         --no-tools) tools=0; shift ;;
         --jump) jump="$2"; shift 2 ;;
+        --firmware) firmware="$firmware $2"; shift 2 ;;
         --verify-only) verify_only=1; shift ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
         *) break ;;
@@ -63,6 +67,14 @@ cp "$repo"/deploy/remote-install.sh "$repo"/deploy/obot-rtd.service "$repo"/depl
 if [ -f "$config" ]; then cp "$config" "$stage/obot/robot.toml"; else cp "$repo/$config" "$stage/obot/robot.toml"; fi
 cp -r "$repo/description" "$stage/obot/description"
 mkdir "$stage/obot/python" && cp -r "$repo/python/src" "$repo/python/pyproject.toml" "$repo/python/README.md" "$stage/obot/python/"
+mkdir "$stage/obot/firmware"
+cp "$repo/deploy/firmware-update.sh" "$stage/obot/"
+for entry in $firmware; do
+    board="${entry%%=*}"; package="${entry#*=}"
+    [ "$board" != "$entry" ] && [ -f "$package" ] || { echo "--firmware $entry: expected BOARD=PACKAGE.tgz, and the package must exist" >&2; exit 2; }
+    cp "$package" "$stage/obot/firmware/"
+    echo "$board $(basename "$package")" >> "$stage/obot/firmware/manifest"
+done
 find "$stage" -name __pycache__ -o -name "*.egg-info" | xargs rm -rf
 git -C "$repo" describe --always --dirty > "$stage/obot/VERSION" 2>/dev/null || true
 tar -C "$stage" -czf "$stage/obot.tar.gz" obot

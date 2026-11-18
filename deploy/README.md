@@ -26,6 +26,7 @@ the Python tools and both services (`obot-rtd`, `obot-ui`), and then runs the ch
 | `--force-config` | replace the robot's `/etc/obot/robot.toml` (otherwise an existing one is kept and the new one is left beside it as `robot.toml.new`) |
 | `--jump HOST` | reach the robot through another ssh host |
 | `--no-tools` | daemon only |
+| `--firmware BOARD=PACKAGE.tgz` | load an obot-controller firmware package onto the motor board with that name or serial number, if it does not already run it (repeatable) |
 | `--verify-only` | change nothing, run the checks |
 
 The robot needs ssh with a key and passwordless sudo for the login user, and internet
@@ -38,6 +39,28 @@ than 1 ms. A kernel without PREEMPT_RT is reported as a warning.
 Tried on two Jetson Nano developer kits: L4T R32.5.0 with a 4.9-rt kernel, and stock
 L4T R32.4.4 (not realtime); on both the worst wake-up in the ten seconds was about 20 us
 on an idle board.
+
+## Motor board firmware
+
+```sh
+deploy/deploy.sh --firmware wl=~/fw/motor_wheel_icmu.tgz --firmware 206c36793032=~/fw/motor_icmu.tgz ... user@robot config/obot1.toml
+obot-firmware-update wl motor_wheel_icmu.tgz        # the same step by hand, on the robot, as root
+```
+
+A package is what the obot-controller build produces for a configuration
+(`cmake --build --preset gcc -t obot_g474_<config>_pkg`, or the release artifacts of that
+repository). A board is named by what `motor_util` lists it as, or by its serial number,
+which is the one to use while a board still carries another name.
+
+A board is written only when it reports a different configuration, or the package's
+contents are not the ones last loaded onto it (recorded under `/var/lib/obot/firmware`).
+The first time a board is written its whole flash is saved there as
+`<serial>.backup-<date>.bin`; `dfu-util -a0 -s 0x08000000 -D <that file>` puts it back.
+A load that fails leaves the board in its bootloader, and running the command again
+finishes it. The robot needs `motor_util` and `dfu-util`.
+
+`deploy/tests/test-firmware-update.sh` runs the script against stand-ins for those tools;
+on a real board the steps were done by hand, not yet through this script.
 
 `.github/workflows/deploy-test.yml` runs the same command from a self-hosted runner on
 the robots' network (label `obot-lab`), against the board named in the repository

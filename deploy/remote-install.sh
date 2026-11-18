@@ -60,6 +60,15 @@ if [ "${OBOT_ISOLATE:-0}" = 1 ] && [ "$cpu" -ge 0 ]; then
     grep -q "isolcpus=$cpu" /proc/cmdline || reboot_needed=1
 fi
 
+install -m 0755 "$here/firmware-update.sh" /usr/local/bin/obot-firmware-update
+if [ -s "$here/firmware/manifest" ]; then
+    echo "== motor board firmware"
+    # obot-rtd is stopped at this point, so nothing else is talking to the boards.
+    while read -r board package; do
+        sh "$here/firmware-update.sh" "$board" "$here/firmware/$package"
+    done < "$here/firmware/manifest"
+fi
+
 systemctl daemon-reload
 systemctl enable -q obot-rtd
 systemctl restart obot-rtd
