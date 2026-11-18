@@ -78,6 +78,9 @@ jobs:
           ip -brief link
       - name: Install
         run: pip install -e "python[ui,log,dev]"
+      - name: Browser for the operator page test
+        if: matrix.python == '3.13'
+        run: pip install playwright && playwright install --with-deps chromium-headless-shell
       - name: Lint
         run: ruff check python
       - name: Test
@@ -106,6 +109,7 @@ jobs:
           mkdir -p dist/obot-rt-aarch64/bin dist/obot-rt-aarch64/config
           cp rt/build/release/obot-rtd rt/build/release/obot-sim-node rt/build/release/obot-rt-latency dist/obot-rt-aarch64/bin/
           cp config/*.toml dist/obot-rt-aarch64/config/
+          cp deploy/* dist/obot-rt-aarch64/
           file dist/obot-rt-aarch64/bin/obot-rtd
           tar -C dist -czf obot-rt-aarch64-static.tar.gz obot-rt-aarch64
       - uses: actions/upload-artifact@v4
@@ -137,3 +141,15 @@ jobs:
         run: |
           mkdir -p "$KAS_WORK_DIR"
           kas shell os/kas/obot.yml:os/kas/orin-nano.yml -c 'bitbake -p && bitbake -n obot-image | tail -5'
+
+  container:
+    # The Python tools as a container image, for robots whose OS has no recent Python
+    # (the Yocto image, the Jetson Nano's Ubuntu 18.04). Built here to keep it working;
+    # not published.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -f docker/Dockerfile -t obot-tools .
+      - name: Smoke test
+        run: docker run --rm obot-tools obot --help
