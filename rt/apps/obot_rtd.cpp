@@ -141,6 +141,7 @@ struct Loop {
         const int64_t rx_deadline = static_cast<int64_t>(config.rt.rx_deadline_us) * 1000;
         const float dt = static_cast<float>(config.period_us) * 1e-6f;
         ipc::RobotCommand command{};
+        ipc::RobotCommand scratch{};
         bool have_command = false;
         ipc::RobotState state{};
         bool overrun = false;
@@ -163,7 +164,12 @@ struct Loop {
             timing.now_real_ns = rt::realtime_ns();
             timing.wake_latency_ns = static_cast<int32_t>(start - next);
             timing.overrun = overrun;
-            if (shm->command_slot().read(command)) have_command = true;
+            // Into a scratch copy first: a read that loses the race with a writer leaves
+            // its output half written, and the previous command must survive that.
+            if (shm->command_slot().read(scratch)) {
+                command = scratch;
+                have_command = true;
+            }
             runtime->begin_cycle(timing, have_command ? &command : nullptr);
 
             // Simulated actuators answer immediately; real ones are waited for.
