@@ -47,7 +47,7 @@ struct ObotDeviceParams {
     float torque_constant = 0.1f;   // N m / A at the motor
     float current_limit = 40;       // A
     float host_timeout_s = 0.05f;   // 0 disables; otherwise no command for this long faults the drive
-    float damped_gain = 1.0f;  // A s / rad (motor), behaviour of DAMPED: windings shorted
+    float damped_gain = 1.0f;       // A s / rad (motor), behaviour of DAMPED: windings shorted
     float velocity_bandwidth = 30;  // rad/s, VELOCITY mode: a critically damped PI tuned for the plant
     float temperature = 30;         // deg C, reported through round robin
     float bus_voltage = 48;         // V
