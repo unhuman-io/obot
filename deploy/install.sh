@@ -3,8 +3,9 @@
 #   sudo ./install.sh <robot.toml> [control cpu]
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
-config="${1:?usage: install.sh <robot.toml> [control cpu]}"
+config="${1:?usage: install.sh <robot.toml> [control cpu] [extra obot-rtd arguments, e.g. --sim]}"
 cpu="${2:--1}"
+extra="${3:-}"
 [ "$(id -u)" = 0 ] || { echo "run as root" >&2; exit 1; }
 
 install -d /usr/local/bin /etc/obot
@@ -14,7 +15,8 @@ if [ -e /etc/obot/robot.toml ]; then
 else
     install -m 0644 "$config" /etc/obot/robot.toml
 fi
-echo "OBOT_RT_CPU=$cpu" > /etc/default/obot-rtd
+[ -d "$here/description" ] && cp -r "$here/description" /etc/obot/
+printf 'OBOT_RT_CPU=%s\nOBOT_RTD_ARGS=%s\n' "$cpu" "$extra" > /etc/default/obot-rtd
 
 getent group obot >/dev/null || groupadd --system obot
 id obot >/dev/null 2>&1 || useradd --system --no-create-home --gid obot --shell /usr/sbin/nologin obot

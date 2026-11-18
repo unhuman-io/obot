@@ -145,6 +145,8 @@ Controller layout (Xbox or any controller the browser reports with the standard 
 | **Start** / **B** | enable / disable |
 | **Back** / **Y** | clear faults / emergency stop |
 
+| **X** | switch to Cartesian mode and back: right stick moves the tool forward / back and rolls the wrist, the D-pad raises / lowers and pitches it. Needs `[arm]` in the configuration; moves that would leave the joint limits or the reach are not made. |
+
 Without a controller the page takes the keyboard: hold Shift as the deadman, W A S D to
 drive, arrow keys for the arm, Space to disable.
 
@@ -165,7 +167,12 @@ convenience stop, not a safety function: the robot needs a hardware emergency st
 Whoever can reach the port can drive the robot. On a network you do not control use
 `obot ui --token SECRET` and open `http://<robot>:8080/?token=SECRET`.
 
-Cameras are listed in the robot configuration:
+The page runs in any browser, on Windows, macOS or Linux; only the robot side needs
+Linux. With `[model] urdf = "..."` in the configuration it draws the robot in 3D from its
+URDF, posed with the measured joint angles.
+
+Cameras are listed in the robot configuration (`realsense:color` and `realsense:depth`
+show an Intel RealSense through `pyrealsense2`; depth is drawn in false colour):
 
 ```toml
 [[camera]]
