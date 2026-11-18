@@ -19,13 +19,19 @@ pytestmark = pytest.mark.vcan
 
 
 @pytest.fixture
-def vcan_robot(shm_name):
+def vcan_robot(shm_name, tmp_path):
     if not all(Path(f"/sys/class/net/vcan{i}").exists() for i in range(3)):
         pytest.skip("vcan0..vcan2 are not set up")
-    node = subprocess.Popen([str(bin_dir() / "obot-sim-node"), "--config", str(CONFIG), *BUSES],
+    # Three processes without realtime priority on a shared test machine: allow the
+    # actuators 100 ms of silence instead of 5 ms before calling it a fault.
+    config = tmp_path / "robot.toml"
+    text = CONFIG.read_text()
+    assert "comm_timeout_cycles = 5 " in text
+    config.write_text(text.replace("comm_timeout_cycles = 5 ", "comm_timeout_cycles = 100 "))
+    node = subprocess.Popen([str(bin_dir() / "obot-sim-node"), "--config", str(config), *BUSES],
                             stderr=subprocess.DEVNULL)
     time.sleep(0.2)
-    daemon = start_daemon(shm_name, *BUSES)
+    daemon = start_daemon(shm_name, *BUSES, config=config)
     with Robot(shm_name) as robot:
         yield robot, node
     stop_daemon(daemon)

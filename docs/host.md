@@ -35,7 +35,7 @@ What runs on the robot's computer, without ROS.
 sudo apt install cmake ninja-build g++ python3-venv
 git submodule update --init
 cd rt && cmake --preset release && cmake --build --preset release && ctest --preset release
-B=~/.cache/obot-build/release
+B=$PWD/build/release
 
 $B/obot-rtd --config ../config/obot3.toml --sim --no-rt &        # simulated actuators
 

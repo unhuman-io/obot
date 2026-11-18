@@ -5,8 +5,7 @@
       "name": "base",
       "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "$env{OBOT_BUILD_ROOT}/${presetName}",
-      "environment": { "OBOT_BUILD_ROOT": "$penv{HOME}/.cache/obot-build" }
+      "binaryDir": "${sourceDir}/build/${presetName}"
     },
     { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "OBOT_RT_WERROR": "ON" } },
     { "name": "debug", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "OBOT_RT_WERROR": "ON" } },

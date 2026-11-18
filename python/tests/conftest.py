@@ -16,11 +16,15 @@ CONFIG = REPO / "config" / "obot3.toml"
 
 
 def bin_dir() -> Path:
-    candidates = [os.environ.get("OBOT_RT_BIN_DIR"), Path.home() / ".cache/obot-build/release", REPO / "rt/build"]
-    for candidate in candidates:
-        if candidate and (Path(candidate) / "obot-rtd").exists():
-            return Path(candidate)
-    pytest.skip("obot-rtd is not built (set OBOT_RT_BIN_DIR)")
+    given = os.environ.get("OBOT_RT_BIN_DIR")
+    if given:
+        # Asked for explicitly: a wrong path is an error, not a reason to look elsewhere.
+        assert (Path(given) / "obot-rtd").exists(), f"OBOT_RT_BIN_DIR={given} has no obot-rtd"
+        return Path(given)
+    default = REPO / "rt/build/release"
+    if (default / "obot-rtd").exists():
+        return default
+    pytest.skip("obot-rtd is not built (cmake --preset release in rt/, or set OBOT_RT_BIN_DIR)")
 
 
 def start_daemon(name: str, *extra: str, config: Path = CONFIG) -> subprocess.Popen:
