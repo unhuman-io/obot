@@ -59,8 +59,10 @@ The first time a board is written its whole flash is saved there as
 A load that fails leaves the board in its bootloader, and running the command again
 finishes it. The robot needs `motor_util` and `dfu-util`.
 
-`deploy/tests/test-firmware-update.sh` runs the script against stand-ins for those tools;
-on a real board the steps were done by hand, not yet through this script.
+`deploy/tests/test-firmware-update.sh` runs the script against stand-ins for those tools.
+On a real board (an obot_g474 motor board on a Jetson Nano) it has loaded a package,
+backed the board up first, and reported "up to date" on the next run, by name and by
+serial number.
 
 `.github/workflows/deploy-test.yml` runs the same command from a self-hosted runner on
 the robots' network (label `obot-lab`), against the board named in the repository

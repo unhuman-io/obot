@@ -39,7 +39,9 @@ if [ "${OBOT_TOOLS:-1}" = 1 ]; then
         set -e
         [ -x "$HOME/.local/bin/uv" ] || curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
         [ -x "$HOME/obot-venv/bin/python" ] || "$HOME/.local/bin/uv" venv -q --python 3.12 "$HOME/obot-venv"
-        "$HOME/.local/bin/uv" pip install -q -p "$HOME/obot-venv" --reinstall-package obot "'"$here"'/python[ui,log]"
+        install="$HOME/.local/bin/uv pip install -q -p $HOME/obot-venv --reinstall-package obot '"$here"'/python[ui,log]"
+        # A robot without internet access can still be updated from what uv has cached.
+        $install 2>/dev/null || $install --offline
     '
     sed "s|OBOT_USER|$user|g; s|/home/$user|$home|g" "$here/obot-ui.service" > /etc/systemd/system/obot-ui.service
 fi
