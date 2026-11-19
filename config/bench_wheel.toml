@@ -1,0 +1,27 @@
+# One wheel board on the bench, on USB: the smallest configuration that talks to real
+# hardware. Used to check the usb_rt transport and the obot driver against a real board
+# (`obot-rtd --config bench_wheel.toml --shm-name obot_bench`, next to a robot's own
+# daemon if there is one).
+
+[robot]
+name = "bench_wheel"
+shm_name = "obot_bench"
+period_us = 1000
+comm_timeout_cycles = 20
+
+[[bus]]
+name = "usb"
+interface = "usbrt"
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "usb"
+usb_name = "wl"
+id = 1
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+continuous = true
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0

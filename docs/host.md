@@ -27,7 +27,8 @@ What runs on the robot's computer, without ROS.
   the operator web page, recording.
 - **`os/`** builds the robot's operating system image.
 - **`config/`** holds one file per robot: `obot3.toml` (Orin, CAN) and `obot1.toml`
-  (Jetson Nano, USB).
+  (Jetson Nano, USB), plus `bench_wheel.toml`, a single wheel board on USB for checking
+  the daemon against real hardware.
 
 ## Try it without a robot
 
