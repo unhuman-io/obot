@@ -1,0 +1,13 @@
+[Unit]
+Description=Realtime tuning for the obot control CPU
+After=systemd-modules-load.service obot-can.service
+Before=obot-rtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/etc/default/obot-rt-tuning
+ExecStart=/usr/libexec/obot/obot-rt-tuning
+
+[Install]
+WantedBy=multi-user.target

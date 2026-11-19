@@ -1,0 +1,32 @@
+#!/bin/sh
+# Runtime settings that complement the kernel command line (isolcpus, nohz_full,
+# rcu_nocbs). Everything here is best effort: a missing knob is reported, not fatal.
+cpu="${OBOT_RT_CPU:--1}"
+log() { echo "obot-rt-tuning: $*"; }
+
+# Fixed maximum frequency: frequency changes cost latency.
+for governor in /sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_governor; do
+    [ -w "$governor" ] && echo performance > "$governor" 2>/dev/null
+done
+log "cpufreq governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
+
+if [ "$cpu" -ge 0 ] 2>/dev/null; then
+    # CAN interrupts are handled on the control CPU, by threads that run above everything
+    # except the control thread itself (obot-rtd uses priority 80).
+    for irq_dir in /proc/irq/[0-9]*; do
+        irq="${irq_dir##*/}"
+        if ls "$irq_dir" 2>/dev/null | grep -qiE 'can|mttcan|mcp251'; then
+            if echo "$cpu" > "$irq_dir/smp_affinity_list" 2>/dev/null; then
+                log "irq $irq ($(ls "$irq_dir" | grep -iE 'can|mcp251' | head -1)) -> cpu $cpu"
+            fi
+            for pid in $(pgrep "irq/$irq-" 2>/dev/null); do
+                chrt -f -p 70 "$pid" 2>/dev/null && log "irq thread $pid -> SCHED_FIFO 70"
+            done
+        fi
+    done
+    isolated="$(cat /sys/devices/system/cpu/isolated 2>/dev/null)"
+    log "control cpu $cpu, isolated cpus: ${isolated:-none}"
+    [ -z "$isolated" ] && log "warning: no isolated CPUs; check the kernel command line"
+fi
+[ "$(cat /sys/kernel/realtime 2>/dev/null)" = "1" ] || log "warning: this kernel is not PREEMPT_RT"
+exit 0

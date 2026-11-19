@@ -1,0 +1,4 @@
+# Jetson Orin Nano developer kit, root filesystem on the SD card.
+header:
+  version: 14
+machine: jetson-orin-nano-devkit

@@ -1,0 +1,5 @@
+# Jetson Orin Nano developer kit (also the "Super": same hardware, the image selects the
+# super power model), root filesystem on the NVMe drive.
+header:
+  version: 14
+machine: jetson-orin-nano-devkit-nvme

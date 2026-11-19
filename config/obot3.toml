@@ -1,0 +1,198 @@
+# obot3: differential drive base, 4 joint arm (shoulder pitch, elbow pitch, wrist pitch,
+# wrist roll). Read by obot-rtd, obot-sim-node and the Python tools.
+#
+# Joint names, zero poses, signs and limits follow the URDF exported from the CAD model
+# (obot3_description/obot3.urdf). Everything marked VERIFY is a placeholder that has not
+# been checked against the hardware or the actuator manual yet.
+
+[robot]
+name = "obot3"
+period_us = 1000              # control cycle
+command_timeout_ms = 100      # commands older than this are not followed: the arm holds, the base stops
+comm_timeout_cycles = 5       # consecutive cycles without a status before a joint faults
+max_bus_load = 0.7            # obot-rtd refuses to start if a bus would be busier than this
+
+[rt]
+cpu = 5                       # the isolated core (isolcpus=5 on the image's kernel command line)
+priority = 80                 # SCHED_FIFO
+lock_memory = true
+
+# --- CAN buses -------------------------------------------------------------------------
+# One command and one status per joint per cycle have to fit in the cycle with margin.
+# Worst case on the wire for an obot joint (48 byte command + 64 byte status, CAN FD):
+# 307 us at 1 / 5 Mbit/s, 218 us at 1 / 8 Mbit/s. At 1 kHz and 70 % load that is two joints
+# per bus at 5 Mbit/s and three at 8 Mbit/s. `obot-rtd --check --config <file>` prints the numbers for a layout.
+
+[[bus]]
+name = "arm_a"
+interface = "can0"
+fd = true
+bitrate = 1_000_000
+data_bitrate = 5_000_000
+
+[[bus]]
+name = "arm_b"
+interface = "can1"
+fd = true
+bitrate = 1_000_000
+data_bitrate = 5_000_000
+
+[[bus]]
+name = "base"
+interface = "can2"
+fd = true
+bitrate = 1_000_000
+data_bitrate = 5_000_000
+
+# --- Arm -------------------------------------------------------------------------------
+# CubeMars AK60-39 (shoulder, elbow) and AK60-6 (wrist) motors with obot driver boards:
+# the same CAN FD protocol as the wheels (motor-realtime's MotorCAN).
+#
+# q_min / q_max are the URDF limits (the hard stops) pulled in by 3 degrees.
+
+[[joint]]
+name = "shoulder_pitch_joint"
+bus = "arm_a"
+driver = "obot"
+id = 1                        # VERIFY
+gear_ratio = 39.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY: set by the homing procedure
+q_min = -1.780
+q_max = 0.733
+qd_max = 2.0                  # rad/s, deliberately far below what the actuator can do
+qdd_max = 8.0
+tau_max = 24.0                # rated torque
+kp = 150.0
+kd = 3.0
+sim = { inertia = 0.5, damping = 0.5, gravity = 19.0 }
+
+[[joint]]
+name = "elbow_pitch_joint"
+bus = "arm_a"
+driver = "obot"
+id = 2                        # VERIFY
+gear_ratio = 39.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -0.087
+q_max = 3.229
+qd_max = 2.5
+qdd_max = 10.0
+tau_max = 24.0
+kp = 100.0
+kd = 2.0
+sim = { inertia = 0.12, damping = 0.2 }
+
+[[joint]]
+name = "wrist_pitch_joint"
+bus = "arm_b"
+driver = "obot"
+id = 3                        # VERIFY
+gear_ratio = 6.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.658
+q_max = 1.431
+qd_max = 4.0
+qdd_max = 20.0
+tau_max = 3.0
+kp = 25.0
+kd = 0.5
+sim = { inertia = 0.012, damping = 0.05 }
+
+[[joint]]
+name = "wrist_roll_joint"
+bus = "arm_b"
+driver = "obot"
+id = 4                        # VERIFY
+gear_ratio = 6.0
+torque_constant = 0.1         # N m / A at the motor, VERIFY
+direction = 1                 # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -2.827
+q_max = 2.827
+qd_max = 4.0
+qdd_max = 20.0
+tau_max = 3.0
+kp = 15.0
+kd = 0.3
+sim = { inertia = 0.003, damping = 0.02 }
+
+# --- Base ------------------------------------------------------------------------------
+# Hub motors with the motor9 controller (obot-controller firmware) inside the wheel.
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "base"
+driver = "obot"
+id = 1                        # VERIFY
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+direction = 1                 # VERIFY
+continuous = true
+qd_max = 12.0                 # rad/s = 1.5 m/s at the tyre
+qdd_max = 20.0
+tau_max = 10.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[[joint]]
+name = "right_wheel_joint"
+bus = "base"
+driver = "obot"
+id = 2                        # VERIFY
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+direction = -1                # VERIFY: the motors are mirrored
+continuous = true
+qd_max = 12.0
+qdd_max = 20.0
+tau_max = 10.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[base]
+left = "left_wheel_joint"
+right = "right_wheel_joint"
+wheel_radius = 0.125          # m, 250 mm tyre
+track_width = 0.38756         # m, between tyre centres
+v_max = 0.8                   # m/s
+omega_max = 2.0               # rad/s
+
+# --- Operator tools (read by the Python side, ignored by obot-rtd) ----------------------
+# The RealSense colour streams show up as ordinary V4L2 devices; the device paths depend
+# on what is plugged in (`v4l2-ctl --list-devices`).
+
+[[camera]]
+name = "base"
+source = "realsense:color"    # with two D435s: "realsense:<serial>:color"
+width = 640
+height = 480
+fps = 15
+
+[[camera]]
+name = "base depth"
+source = "realsense:depth"
+width = 640
+height = 480
+fps = 15
+
+# --- Arm geometry, for Cartesian teleoperation (read by the Python side) -----------------
+# Three pitch joints in one plane, then roll. Angles are measured in the arm's plane from
+# forward (x) towards up (z); `zero` is each link's direction with all joints at 0.
+
+[arm]
+type = "planar3r"
+joints = ["shoulder_pitch_joint", "elbow_pitch_joint", "wrist_pitch_joint"]
+roll = "wrist_roll_joint"
+lengths = [0.25, 0.22, 0.1308]     # shoulder-elbow, elbow-wrist, wrist-tool flange, m
+zero = [1.5708, 0.0, 0.0]          # upper arm points up, forearm and tool forward
+
+# --- Robot model shown on the operator page (path relative to this file) -----------------
+
+[model]
+urdf = "../description/obot3/obot3.urdf"

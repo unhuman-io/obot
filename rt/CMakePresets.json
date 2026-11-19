@@ -1,0 +1,60 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    { "name": "release", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "OBOT_RT_WERROR": "ON" } },
+    { "name": "debug", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "OBOT_RT_WERROR": "ON" } },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug", "OBOT_RT_WERROR": "ON", "OBOT_RT_SANITIZE": "address,undefined" }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo", "OBOT_RT_WERROR": "ON", "OBOT_RT_SANITIZE": "thread" }
+    },
+    {
+      "name": "clang",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "OBOT_RT_WERROR": "ON",
+        "CMAKE_CXX_COMPILER": "clang++"
+      }
+    },
+    {
+      "name": "aarch64",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "OBOT_RT_WERROR": "ON",
+        "CMAKE_SYSTEM_NAME": "Linux",
+        "CMAKE_SYSTEM_PROCESSOR": "aarch64",
+        "CMAKE_CXX_COMPILER": "aarch64-linux-gnu-g++",
+        "CMAKE_CROSSCOMPILING_EMULATOR": "qemu-aarch64;-L;/usr/aarch64-linux-gnu"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "release", "configurePreset": "release" },
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "clang", "configurePreset": "clang" },
+    { "name": "aarch64", "configurePreset": "aarch64" }
+  ],
+  "testPresets": [
+    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
+    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
+    { "name": "asan", "configurePreset": "asan", "output": { "outputOnFailure": true } },
+    { "name": "tsan", "configurePreset": "tsan", "output": { "outputOnFailure": true } },
+    { "name": "clang", "configurePreset": "clang", "output": { "outputOnFailure": true } },
+    { "name": "aarch64", "configurePreset": "aarch64", "output": { "outputOnFailure": true }, "filter": { "exclude": { "label": "vcan|realtime" } } }
+  ]
+}
