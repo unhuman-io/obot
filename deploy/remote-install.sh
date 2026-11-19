@@ -15,6 +15,7 @@ cpu="${OBOT_CPU:--1}"
 echo "== programs"
 install -d /usr/local/bin /etc/obot
 systemctl stop obot-rtd 2>/dev/null || true
+rm -f /dev/shm/obot*.lock   # lock files that earlier versions of the daemon left behind
 install -m 0755 "$here"/bin/* /usr/local/bin/
 rm -rf /etc/obot/description && cp -r "$here/description" /etc/obot/description
 if [ ! -e /etc/obot/robot.toml ] || [ "${OBOT_FORCE_CONFIG:-0}" = 1 ]; then

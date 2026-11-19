@@ -4,9 +4,12 @@
 fail=0
 check() { if eval "$2" >/dev/null 2>&1; then echo "ok    $1"; else echo "FAIL  $1"; fail=1; fi; }
 cpu="${OBOT_CPU:--1}"
+# The daemon's shared memory name, as configured.
+shm="$(sed -n 's/^shm_name *= *"\(.*\)".*/\1/p' /etc/obot/robot.toml 2>/dev/null | head -1)"
+shm="${shm:-obot}"
 
 check "obot-rtd service is active" "systemctl is-active obot-rtd"
-check "shared memory is published" "test -s /dev/shm/obot"
+check "shared memory is published" "test -s /dev/shm/$shm"
 check "daemon is realtime (SCHED_FIFO)" "ps -eLo cls,comm | grep -q '^ *FF *obot-rtd'"
 check "no realtime setup warnings in the log" "! journalctl -u obot-rtd -b --no-pager | tail -40 | grep -q 'warning: could not'"
 if [ "$cpu" -ge 0 ]; then
@@ -29,12 +32,13 @@ if [ "${OBOT_TOOLS:-1}" = 1 ]; then
     report="$(sg obot -c "$HOME/obot-venv/bin/python - <<'PY'
 import time
 from obot import Robot
-r = Robot(); first = r.state(); r.read(); worst = 0; end = time.time() + 10
+r = Robot('$shm'); first = r.state(); r.read(); worst = 0; end = time.time() + 10
 while time.time() < end:
     time.sleep(0.5); s = r.read(); worst = max(worst, int(s['wake_latency_ns'].max()))
 last = r.state()
 print(int(last['cycle'] - first['cycle']), int(last['overruns'] - first['overruns']), worst // 1000)
-PY")"
+PY
+" 2>/dev/null)" || report=""
     echo "      10 s of control loop: cycles, overruns, worst wake-up (us): $report"
     set -- $report
     check "control loop ran at its rate (about 10000 cycles)" "test ${1:-0} -ge 9000"

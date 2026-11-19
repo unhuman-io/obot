@@ -207,6 +207,9 @@ TEST_CASE("shared memory region: a restarted daemon gets a fresh region") {
     CHECK(still.info().num_joints == 1);
 
     first.reset();  // the first daemon exits
+    // Nothing but the region itself is left in /dev/shm: a leftover lock file owned by one
+    // user would keep a daemon run by another user from starting.
+    CHECK(::access((ShmRegion::path_for(name) + ".lock").c_str(), F_OK) != 0);
     info.num_joints = 2;
     ShmRegion second = ShmRegion::create(name, info);
     second.publish();

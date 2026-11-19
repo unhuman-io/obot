@@ -50,7 +50,6 @@ class ShmRegion {
 
     std::string name_;
     int fd_ = -1;
-    int lock_fd_ = -1;  // daemon only: held for as long as the region is served
     void* base_ = nullptr;
     bool owner_ = false;
     ShmHeader* header_ = nullptr;
