@@ -67,8 +67,9 @@ install -m 0755 "$here/firmware-update.sh" /usr/local/bin/obot-firmware-update
 if [ -s "$here/firmware/manifest" ]; then
     echo "== motor board firmware"
     # obot-rtd is stopped at this point, so nothing else is talking to the boards.
+    # A board that could not be loaded is reported at the end; the services still start.
     while read -r board package; do
-        sh "$here/firmware-update.sh" "$board" "$here/firmware/$package"
+        sh "$here/firmware-update.sh" "$board" "$here/firmware/$package" || touch "$here/firmware/failed"
     done < "$here/firmware/manifest"
 fi
 
@@ -80,4 +81,8 @@ if [ "${OBOT_TOOLS:-1}" = 1 ]; then
     systemctl restart obot-ui
 fi
 [ "$reboot_needed" = 1 ] && echo "REBOOT NEEDED for the CPU isolation to take effect"
+if [ -e "$here/firmware/failed" ]; then
+    echo "FIRMWARE: at least one motor board could not be loaded (see above)" >&2
+    exit 1
+fi
 exit 0

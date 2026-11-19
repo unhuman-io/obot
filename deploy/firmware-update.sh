@@ -9,10 +9,12 @@
 #   PACKAGE  a package from the obot-controller build (<config>.tgz with
 #            <config>_noparam.bin, <config>_param.bin, <config>_calibration.bin)
 #
-# "Up to date" means: the board reports the package's configuration name, and the
-# package's contents are the ones this script last loaded onto that board (recorded under
-# /var/lib/obot/firmware). Before a board is written for the first time its whole flash
-# is saved there too. obot-rtd is stopped while a board is being written.
+# "Up to date" means: the package's contents are the ones this script last loaded onto
+# that board, and the board still identifies itself over USB with the version string it
+# had right after that load (both recorded under /var/lib/obot/firmware). If the board
+# also answers its text interface, the configuration name it reports has to match too.
+# Before a board is written for the first time its whole flash is saved there.
+# obot-rtd is stopped while a board is being written.
 #
 # Needs motor_util and dfu-util. Exit status: 0 up to date or loaded, 1 failed.
 set -eu
@@ -70,15 +72,43 @@ if [ -z "$serial" ]; then
     running=0
 fi
 
+# The firmware version string the board presents in its USB descriptors (always there,
+# unlike answers from the text interface).
+usb_version() {
+    for dev in "${OBOT_SYSFS:-/sys/class/usbmisc}"/mtr* "${OBOT_SYSFS:-/sys/class/usbmisc}"/usbrt*; do
+        [ -r "$dev/device/../serial" ] || continue
+        if [ "$(lower "$(cat "$dev/device/../serial")")" = "$serial" ]; then
+            cat "$dev/device/../configuration" 2>/dev/null
+            return 0
+        fi
+    done
+}
+
+# One value from the board's text interface. Some boards answer it slowly or only now and
+# then, so an empty answer is asked for again a few times. The version check is off: the
+# question has to work on firmware of any age.
+ask() {
+    tries=0
+    while [ "$tries" -lt 4 ]; do
+        for spelling in "$serial" "$(echo "$serial" | tr 'a-z' 'A-Z')"; do
+            answer="$(motor_util -c none --no-list -s "$spelling" --set-api "$1" 2>/dev/null | grep -v "^ *$" | tail -1 | sed 's/.*: *//')"
+            case "$answer" in "" | *xception* | *what\(\)*) ;; *) echo "$answer"; return 0 ;; esac
+        done
+        tries=$((tries + 1))
+        sleep 0.5
+    done
+    return 0
+}
+
 record="$state/$serial.loaded"
 if [ "$running" = 1 ] && [ "$force" = 0 ]; then
-    has="$(motor_util --no-list -s "$serial" --set-api config 2>/dev/null | tail -1 | sed 's/.*: *//')"
-    [ -n "$has" ] || has="$(motor_util --no-list -s "$(echo "$serial" | tr 'a-z' 'A-Z')" --set-api config 2>/dev/null | tail -1 | sed 's/.*: *//')"
-    if [ "$has" = "$config" ] && [ "$(cat "$record" 2>/dev/null)" = "$want" ]; then
+    has="$(ask config)"
+    if [ "$(sed -n 1p "$record" 2>/dev/null)" = "$want" ] && [ "$(sed -n 2p "$record" 2>/dev/null)" = "$(usb_version)" ] &&
+        { [ -z "$has" ] || [ "$has" = "$config" ]; }; then
         say "up to date ($config)"
         exit 0
     fi
-    say "runs '${has:-unknown}', loading '$config'"
+    say "runs '${has:-$(usb_version)}', loading '$config'"
 else
     say "loading '$config'"
 fi
@@ -89,6 +119,8 @@ if systemctl is-active --quiet obot-rtd 2>/dev/null; then
     systemctl stop obot-rtd
     restart=1
 fi
+# However this ends, the daemon that was running is started again.
+trap 'rm -rf "$work"; [ "$restart" = 1 ] && systemctl start obot-rtd' EXIT
 
 if [ "$running" = 1 ]; then
     exact="$(dfu_serial Runtime)"
@@ -118,11 +150,12 @@ download 0x08070000 "$dir/${config}_calibration.bin"
 dfu-util -a0 -s 0x08000000:8:leave -U "$work/leave" -S "$exact" >/dev/null 2>&1 || true
 
 wait_for "the board to restart" sh -c "motor_util --list-serial-number-only 2>/dev/null | tr 'A-Z' 'a-z' | grep -qw '$serial'"
-now="$(motor_util --no-list -s "$serial" --set-api config 2>/dev/null | tail -1 | sed 's/.*: *//')"
-[ -n "$now" ] || now="$(motor_util --no-list -s "$(echo "$serial" | tr 'a-z' 'A-Z')" --set-api config 2>/dev/null | tail -1 | sed 's/.*: *//')"
-[ "$now" = "$config" ] || die "after loading, the board reports '$now' instead of '$config'"
-echo "$want" > "$record"
-version="$(motor_util --no-list -s "$serial" --set-api version 2>/dev/null | tail -1 | sed 's/.*: *//')"
-say "loaded $config ${version:-}"
-[ "$restart" = 1 ] && systemctl start obot-rtd
+now="$(ask config)"
+[ -z "$now" ] || [ "$now" = "$config" ] || die "after loading, the board reports '$now' instead of '$config'"
+printf '%s\n%s\n' "$want" "$(usb_version)" > "$record"
+if [ -n "$now" ]; then
+    say "loaded $config ($(usb_version))"
+else
+    say "loaded $config ($(usb_version)); the board's text interface did not answer, so the configuration name is unconfirmed"
+fi
 exit 0

@@ -26,6 +26,8 @@ add_test(NAME config_obot3_check
 add_test(NAME config_obot1_check
          COMMAND obot-rtd --check --config ${PROJECT_SOURCE_DIR}/../config/obot1.toml)
 
+add_test(NAME config_obot1_base_check
+         COMMAND obot-rtd --check --config ${PROJECT_SOURCE_DIR}/../config/obot1_base.toml)
 add_test(NAME config_bench_wheel_check
          COMMAND obot-rtd --check --config ${PROJECT_SOURCE_DIR}/../config/bench_wheel.toml)
 

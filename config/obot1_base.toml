@@ -1,0 +1,68 @@
+# obot v1 with only its base connected: the two wheel boards on USB (`wl` with an iC-MU,
+# `wr` with an iC-PZ as motor encoder). The arm's joints are left out, so the daemon runs
+# with just these two boards plugged in. See obot1.toml for the whole robot.
+#
+# Everything marked VERIFY is a placeholder.
+
+[robot]
+name = "obot1_base"
+period_us = 1000
+command_timeout_ms = 150
+comm_timeout_cycles = 10
+
+[rt]
+cpu = 3
+priority = 80
+lock_memory = true
+
+[[bus]]
+name = "usb"
+interface = "usbrt"
+
+# --- Base ------------------------------------------------------------------------------
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "usb"
+usb_name = "wl"
+id = 1
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+direction = 1                 # VERIFY
+continuous = true
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[[joint]]
+name = "right_wheel_joint"
+bus = "usb"
+usb_name = "wr"
+id = 2
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+direction = -1                # VERIFY
+continuous = true
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[base]
+left = "left_wheel_joint"
+right = "right_wheel_joint"
+wheel_radius = 0.125          # m, VERIFY
+track_width = 0.32            # m, VERIFY
+v_max = 0.5
+omega_max = 1.5
+
+# --- Operator tools (read by the Python side, ignored by obot-rtd) ----------------------
+
+[[camera]]
+name = "front"
+# The CSI camera on the Jetson Nano, through NVIDIA's camera source and JPEG encoder.
+source = "gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=15/1 ! nvjpegenc"
+fps = 15

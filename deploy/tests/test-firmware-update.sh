@@ -6,8 +6,11 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 t="$(mktemp -d)"
 trap 'rm -rf "$t"' EXIT
 mkdir -p "$t/bin" "$t/state" "$t/pkg/motor_test" "$t/pkg2/motor_test"
-export BOARD_DIR="$t/board" OBOT_FIRMWARE_STATE="$t/state" PATH="$t/bin:$PATH"
-mkdir -p "$BOARD_DIR"
+export BOARD_DIR="$t/board" OBOT_FIRMWARE_STATE="$t/state" PATH="$t/bin:$PATH" OBOT_SYSFS="$t/sys"
+mkdir -p "$BOARD_DIR" "$t/sys/mtr0/device" "$t/sys/usb"
+# What the usb_rt driver shows in sysfs for the board: serial number and version string.
+ln -s ../usb/serial "$t/sys/mtr0/serial"; ln -s ../usb/configuration "$t/sys/mtr0/configuration"
+echo 206C36793032 > "$t/sys/usb/serial"; echo "v0.1-old" > "$t/sys/usb/configuration"
 echo old_config > "$BOARD_DIR/config"; echo runtime > "$BOARD_DIR/mode"; : > "$BOARD_DIR/calls"
 
 cat > "$t/bin/motor_util" <<'STUB'
@@ -16,8 +19,11 @@ cat > "$t/bin/motor_util" <<'STUB'
 case "$*" in
     *--list-names-only*) echo wl ;;
     *--list-serial-number-only*) echo 206C36793032 ;;
-    *"--set-api config"*) echo "wl: $(cat "$BOARD_DIR/config")" ;;
-    *"--set-api version"*) echo "wl: v1.2-3" ;;
+    *"--set-api config"*)
+        # A board that answers its text interface only every third time.
+        n=$(($(cat "$BOARD_DIR/asks" 2>/dev/null || echo 0) + 1)); echo $n > "$BOARD_DIR/asks"
+        [ -e "$BOARD_DIR/flaky" ] && [ $((n % 3)) -ne 0 ] && exit 0
+        echo "wl: $(cat "$BOARD_DIR/config")" ;;
 esac
 STUB
 cat > "$t/bin/dfu-util" <<'STUB'
@@ -32,7 +38,8 @@ case "$*" in
     *-U*) [ "$mode" = dfu ] || exit 1; f="$(echo "$*" | sed 's/.*-U \([^ ]*\).*/\1/')"; echo flash-image > "$f" ;;
     *-D*) [ "$mode" = dfu ] || exit 1
           [ -e "$BOARD_DIR/fail-download" ] && exit 1
-          case "$*" in *_noparam.bin*) echo motor_test > "$BOARD_DIR/config" ;; esac
+          case "$*" in *_noparam.bin*) echo motor_test > "$BOARD_DIR/config"
+                                        echo "v1.2-3 $(cksum < "$(echo "$*" | sed 's/.*-D \([^ ]*\).*/\1/')")" > "$OBOT_SYSFS/usb/configuration" ;; esac
           echo "File downloaded successfully" ;;
 esac
 STUB
@@ -57,7 +64,7 @@ run() { sh "$here/firmware-update.sh" "$@" > "$t/out" 2>&1; }
 
 touch "$BOARD_DIR/rtd-active"
 run wl "$t/pkg.tgz" || fail "first load failed: $(cat "$t/out")"
-grep -q "loaded motor_test v1.2-3" "$t/out" || fail "no load reported"
+grep -q "loaded motor_test (v1.2-3" "$t/out" || fail "no load reported: $(cat "$t/out")"
 grep -q "previous contents saved" "$t/out" || fail "no backup on the first write"
 ls "$t/state"/206c36793032.backup-*.bin >/dev/null || fail "backup file missing"
 [ "$(grep -c -- "-D" "$BOARD_DIR/calls")" = 2 ] || fail "expected firmware and parameters to be written (not the empty calibration)"
@@ -88,6 +95,30 @@ run --force wl "$t/pkg.tgz" && fail "a failed write must be an error"
 rm "$BOARD_DIR/fail-download"
 run 206c36793032 "$t/pkg.tgz" || fail "recovery from the bootloader failed: $(cat "$t/out")"
 grep -q "loaded motor_test" "$t/out" || fail "recovery did not load"
+
+# A board whose text interface never answers is still loaded and recognised afterwards.
+mv "$t/bin/motor_util" "$t/bin/motor_util.real"
+sed 's/.*--set-api config.*/    *"--set-api config"*) exit 0 ;;/; /A board that answers/,/echo "wl: /d' "$t/bin/motor_util.real" > "$t/bin/motor_util"; chmod +x "$t/bin/motor_util"
+: > "$BOARD_DIR/calls"
+run --force wl "$t/pkg.tgz" && grep -q "unconfirmed" "$t/out" || fail "silent text interface, load: $(cat "$t/out")"
+: > "$BOARD_DIR/calls"
+run wl "$t/pkg.tgz" && grep -q "up to date" "$t/out" || fail "silent text interface, up to date: $(cat "$t/out")"
+grep -q -- "-D" "$BOARD_DIR/calls" && fail "a silent but current board was rewritten"
+run wl "$t/pkg2.tgz" && grep -q "loaded motor_test" "$t/out" || fail "silent text interface, changed package"
+mv "$t/bin/motor_util.real" "$t/bin/motor_util"
+
+# A board whose text interface answers only now and then is asked again, not failed.
+touch "$BOARD_DIR/flaky"
+run wl "$t/pkg2.tgz" && grep -q "up to date" "$t/out" || fail "flaky text interface, up to date: $(cat "$t/out")"
+run wl "$t/pkg.tgz" && grep -q "loaded motor_test" "$t/out" || fail "flaky text interface, load: $(cat "$t/out")"
+rm "$BOARD_DIR/flaky"
+
+# The daemon is started again even when a load fails.
+touch "$BOARD_DIR/fail-download" "$BOARD_DIR/rtd-active"; : > "$BOARD_DIR/calls"
+run --force wl "$t/pkg.tgz" && fail "a failed write must be an error"
+grep -q "systemctl start obot-rtd" "$BOARD_DIR/calls" || fail "the daemon was left stopped after a failed load"
+rm "$BOARD_DIR/fail-download"
+run 206c36793032 "$t/pkg.tgz" || fail "recovery after the failed load"
 
 run nosuchboard "$t/pkg.tgz" && fail "an unknown board must be an error"
 grep -q "no board with that name" "$t/out" || fail "unhelpful message for an unknown board"
