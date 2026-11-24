@@ -53,6 +53,13 @@ A build script builds the project
 ./obot/install_obot_build_deps.sh
 ./obot/build_obot.sh
 ```
+To work on the source, set up the clones once: clang-format on the files of each commit,
+at the version that CI checks, and a `git blame` that passes over the formatting commits.
+```shell
+./obot/setup-dev.sh
+```
+It covers the clones of the workspace and their submodules, and takes a clone or a
+directory of clones as an argument for another layout.
 
 # Jetson Nano image
 
