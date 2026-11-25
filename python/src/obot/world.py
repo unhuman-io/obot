@@ -200,6 +200,7 @@ class WorldMap:
         self.rev = 0
         self._horizon = 0  # clients that last asked before this are sent everything
         self._removed: list[tuple[int, np.ndarray]] = []
+        self._trail_lock = threading.Lock()  # its own: add_pose is called from the page's main loop
         self._trail: list[tuple[float, float]] = []
         self._trail_start = 0  # how many trail points were dropped from the front
         self._empty()
@@ -220,8 +221,9 @@ class WorldMap:
         with self._lock:
             self._empty()
             self._removed.clear()
-            self._trail_start += len(self._trail)
-            self._trail.clear()
+            with self._trail_lock:
+                self._trail_start += len(self._trail)
+                self._trail.clear()
             self.rev += 1
             self._horizon = self.rev
 
@@ -325,8 +327,9 @@ class WorldMap:
         self._changed, self._seen = self._changed[keep], self._seen[keep]
 
     def add_pose(self, x: float, y: float, step: float = 0.02, limit: int = 20_000) -> None:
-        """Remember where the robot has been (a point for every `step` metres travelled)."""
-        with self._lock:
+        """Remember where the robot has been (a point for every `step` metres travelled).
+        Never waits for a map update."""
+        with self._trail_lock:
             if self._trail and math.hypot(x - self._trail[-1][0], y - self._trail[-1][1]) < step:
                 return
             self._trail.append((x, y))
@@ -357,8 +360,9 @@ class WorldMap:
                 pick = self._shown & (self._changed > since)
                 gone = [index for rev, index in self._removed if rev > since]
                 removed = np.concatenate(gone) if gone else np.empty((0, 3), np.int16)
-            first = min(max(trail, self._trail_start), self._trail_start + len(self._trail))
-            path = np.asarray(self._trail[first - self._trail_start:], np.float32).reshape(-1, 2)
+            with self._trail_lock:
+                first = min(max(trail, self._trail_start), self._trail_start + len(self._trail))
+                path = np.asarray(self._trail[first - self._trail_start:], np.float32).reshape(-1, 2)
             changed, rgb = self._index[pick], self._rgb[pick]
             header = self.HEADER.pack(self.MAGIC, self.epoch, self.rev, 1 if reset else 0, len(changed),
                                       len(removed), first, len(path), self.voxel)

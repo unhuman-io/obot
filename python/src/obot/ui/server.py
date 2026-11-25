@@ -18,6 +18,7 @@ import contextlib
 import hmac
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -90,6 +91,7 @@ class UiServer:
         self.sockets: dict[web.WebSocketResponse, Operator] = {}
         self.local: Operator | None = None
         self.joystick = None
+        self._joystick_looked = 0.0
         self.controlling: Operator | None = None
         self.pending_requests: list[Request] = []
         self.status = {"robot": "connecting", "operator": None, "group": 0, "moving": False}
@@ -160,8 +162,10 @@ class UiServer:
             since, epoch, trail = (int(request.query.get(key, 0)) for key in ("since", "epoch", "trail"))
         except ValueError:
             raise web.HTTPBadRequest(text="since, epoch and trail are numbers") from None
-        return web.Response(body=self.world.map.delta(since, epoch, trail),
-                            content_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+        # Not on the event loop: this waits while the map is being updated, and the loop
+        # is what passes the operator's controller on to the robot.
+        body = await asyncio.get_running_loop().run_in_executor(None, self.world.map.delta, since, epoch, trail)
+        return web.Response(body=body, content_type="application/octet-stream", headers={"Cache-Control": "no-store"})
 
     async def _mesh(self, request: web.Request) -> web.FileResponse:
         path = model.mesh_path(self.config.urdf, request.match_info["path"]) if self.config.urdf else None
@@ -276,6 +280,10 @@ class UiServer:
         from ..teleop.joystick import Joystick, find_joystick
 
         if self.joystick is None or not self.joystick.connected:
+            now = time.monotonic()
+            if now - self._joystick_looked < 1.0:   # looking is a directory scan: not on every tick
+                return
+            self._joystick_looked = now
             path = find_joystick() if self.joystick_path == "auto" else self.joystick_path
             if not path:
                 return
@@ -345,9 +353,9 @@ class UiServer:
             self._poll_joystick()
             state = self.robot.state()
             if self.world is not None and state is not None:
-                joints = {name: float(q) for name, q in zip(self.robot.info.joint_names, state["q"], strict=False)}
+                self.world.joint_names = self.robot.info.joint_names
                 self.world.update_pose(float(state["odom_x"]), float(state["odom_y"]), float(state["odom_yaw"]),
-                                       float(state["base_omega"]), joints)
+                                       float(state["base_omega"]), state["q"])
             operator = self._choose_operator()
             pad = operator.pad if operator else GamepadState()
             out = self.mapper.step(pad, state, dt)
@@ -362,13 +370,18 @@ class UiServer:
                                   "fps": round(c.fps, 1)}
                            for name, c in self.cameras.items()}
                 await self._broadcast({"type": "state", "status": self.status, "cameras": cameras,
-                                       "world": self.world.describe() if self.world else None,
+                                       # Where the cameras are does not need the state's rate.
+                                       "world": self.world.describe() if self.world and tick % 9 == 0 else None,
                                        **describe(state, self.robot.info)})
 
 
 def run(config: ToolsConfig, host: str = "0.0.0.0", port: int = 8080, token: str | None = None,
         joystick: str | None = None, cameras: bool = True) -> None:
     server = UiServer(config, token=token, joystick_path=joystick, cameras=cameras)
+    # Camera and map threads spend their time in OpenCV and numpy and only briefly need the
+    # interpreter. With the default of 5 ms a thread that asks for it can wait that long
+    # every time; on a small computer that made each of them several times slower.
+    sys.setswitchinterval(0.001)
     # Camera streams are responses that never end by themselves; do not wait a minute for
     # them when asked to stop.
     web.run_app(server.app(), host=host, port=port, print=lambda *_: None, shutdown_timeout=1.0)

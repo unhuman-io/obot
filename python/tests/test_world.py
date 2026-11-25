@@ -203,7 +203,7 @@ def test_world_view_maps_the_room_while_the_robot_moves():
         # odometry would report them.
         path = [(x, 0.0, 0.0) for x in np.linspace(0, 0.6, 13)] + [(0.6, 0.0, yaw) for yaw in np.linspace(0, 0.7, 8)]
         for x, y, yaw in path:
-            view.update_pose(x, y, yaw, 0.0, {})
+            view.update_pose(x, y, yaw, 0.0)
             before = view.cameras["room depth"].raw()[0]
             # A depth and a colour picture taken from the new place, then one map update.
             assert wait_for(lambda before=before: min(c.raw()[0] for c in cameras.values()) > before + 0.01)
@@ -237,7 +237,7 @@ def test_world_view_maps_the_room_while_the_robot_moves():
         trail = WorldMap.decode(view.map.delta())["trail"]
         assert trail[0].tolist() == [0.0, 0.0] and trail[-1].tolist() == pytest.approx([0.6, 0.0])
         # While turning fast, pictures are not used.
-        view.update_pose(0.6, 0.0, 0.7, 2.0, {})
+        view.update_pose(0.6, 0.0, 0.7, 2.0)
         before = view.cameras["room depth"].raw()[0]
         assert wait_for(lambda: view.cameras["room depth"].raw()[0] > before + 0.01)
         assert view.step() == 0
@@ -335,10 +335,39 @@ async def test_page_server_serves_the_map(robot, daemon):
         assert (await client.get("/api/world", params={"since": "x"})).status == 400
 
         await ws.send_json({"type": "world", "action": "level"})
-        state = await next_state(ws, lambda s: s["world"]["leveled"], timeout=10)
+        state = await next_state(ws, lambda s: s["world"] and s["world"]["leveled"], timeout=10)
         assert state["world"]["leveled"]["room depth"]["xyz"] == pytest.approx([0.15, 0.0, 0.5], abs=0.01)
         await ws.send_json({"type": "world", "action": "clear"})
         await asyncio.sleep(0.05)
         cleared = WorldMap.decode(await (await client.get(
             "/api/world", params={"since": update["rev"], "epoch": update["epoch"]})).read())
         assert cleared["reset"]
+
+
+def test_a_camera_on_the_arm_moves_with_the_joints():
+    from conftest import CONFIG
+
+    from obot.config import load
+    from obot.ui.worldview import WorldView
+
+    config = load(str(CONFIG))
+    config.cameras = [CameraConfig(name="wrist depth", source="scene:depth", link="wrist_camera_link",
+                                   xyz=(0.01, 0.0, 0.0))]
+    view = WorldView(config, {"wrist depth": type("NoCamera", (), {"pose": None})()})
+    view.joint_names = ("shoulder_pitch_joint", "elbow_pitch_joint")
+    camera = config.cameras[0]
+    view.update_pose(1.0, 2.0, 0.0, 0.0, [0.0, 0.0])
+    straight = view.camera_pose(camera)
+    expected = (world.base_pose(1.0, 2.0, 0.0) @ view.links.pose("wrist_camera_link", {})
+                @ world.transform((0.01, 0, 0)) @ world.OPTICAL)
+    assert np.allclose(straight, expected)
+    view.update_pose(1.0, 2.0, 0.0, 0.0, [0.5, 0.0])
+    bent = view.camera_pose(camera)
+    assert np.linalg.norm(bent[:3, 3] - straight[:3, 3]) > 0.05      # the shoulder carried it along
+    assert np.allclose(bent, world.base_pose(1.0, 2.0, 0.0)
+                       @ view.links.pose("wrist_camera_link", {"shoulder_pitch_joint": 0.5})
+                       @ world.transform((0.01, 0, 0)) @ world.OPTICAL, atol=1e-6)
+    bad = load(str(CONFIG))
+    bad.cameras = [CameraConfig(name="d", source="scene:depth", link="no_such_link")]
+    with pytest.raises(ValueError, match="no_such_link"):
+        WorldView(bad, {"d": None})

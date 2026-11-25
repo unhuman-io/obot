@@ -35,7 +35,9 @@ class WorldView:
         for c in config.cameras:
             if c.link and (self.links is None or c.link not in self.links.links):
                 raise ValueError(f"camera {c.name}: link '{c.link}' is not in the robot model")
-        self._poses: deque = deque(maxlen=250)  # (time, x, y, yaw, yaw rate, {joint: angle})
+        self.joint_names: tuple[str, ...] = ()  # set by whoever calls update_pose with q
+        self._on_links = any(c.link for c in self.depth) or any(c.link for c in self.colour.values())
+        self._poses: deque = deque(maxlen=250)  # (time, x, y, yaw, yaw rate, joint angles)
         self._lock = threading.Lock()
         self._last: dict[str, float] = {}
         self.leveled: dict[str, dict] = {}
@@ -61,25 +63,28 @@ class WorldView:
 
     # --- where things are --------------------------------------------------------------------
 
-    def update_pose(self, x: float, y: float, yaw: float, yaw_rate: float, joints: dict[str, float]) -> None:
-        """Called with every state the page server reads."""
+    def update_pose(self, x: float, y: float, yaw: float, yaw_rate: float, q=None) -> None:
+        """Called with every state the page server reads; q are the joint angles in the
+        order of joint_names (only looked at if a camera is on a link of the arm)."""
+        q = np.array(q, np.float32) if self._on_links and q is not None else None
         with self._lock:
-            self._poses.append((time.monotonic(), x, y, yaw, yaw_rate, joints))
+            self._poses.append((time.monotonic(), x, y, yaw, yaw_rate, q))
         self.map.add_pose(x, y)
 
     def _pose_at(self, t: float | None):
         with self._lock:
             if not self._poses:
-                return (0.0, 0.0, 0.0, 0.0, 0.0, {})
+                return (0.0, 0.0, 0.0, 0.0, 0.0, None)
             if t is None:
                 return self._poses[-1]
             return min(self._poses, key=lambda sample: abs(sample[0] - t))
 
     def camera_pose(self, camera: CameraConfig, t: float | None = None) -> np.ndarray:
         """Pose of the camera's optical frame in the world at time t (None: now)."""
-        _, x, y, yaw, _, joints = self._pose_at(t)
+        _, x, y, yaw, _, q = self._pose_at(t)
         pose = world.base_pose(x, y, yaw)
         if camera.link:
+            joints = {} if q is None else {name: float(v) for name, v in zip(self.joint_names, q, strict=False)}
             pose = pose @ self.links.pose(camera.link, joints)
         return pose @ self.mounts[camera.name] @ world.OPTICAL
 
