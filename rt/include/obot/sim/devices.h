@@ -45,7 +45,8 @@ struct ObotDeviceParams {
     float velocity_bandwidth = 30;  // rad/s, VELOCITY mode: a critically damped PI tuned for the plant
     float temperature = 30;         // deg C, reported through round robin
     float bus_voltage = 48;         // V
-    float position_wrap = 0;        // rad at the motor: the reported position wraps by this much, 0: never
+    float position_wrap = 0;        // rad at the motor: the reported position stays within half of
+                                    // this either side of zero and jumps by it; 0: never wraps
     PlantParams plant;
 };
 

@@ -16,8 +16,9 @@ struct ObotDriverConfig {
     bool torque_sensor = false;   // torque from the drive's torque sensor instead of iq * kt * ratio
     float damped_kd = 0;          // Damped: 0 uses the firmware DAMPED mode (shorted windings),
                                   // otherwise velocity damping with this gain, N m s / rad
-    float wrap = 0;               // the drive's position wraps around by this much, rad at the
-                                  // joint (the firmware's encoder rollover); 0: it does not
+    float wrap = 0;               // the drive's position jumps by this much when it wraps, rad at
+                                  // the joint; 0: it does not wrap. The firmware keeps its
+                                  // position within +-rollover, so this is twice its rollover.
 };
 
 class ObotDriver {

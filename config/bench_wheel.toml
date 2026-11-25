@@ -18,8 +18,9 @@ interface = "usbrt"
 # direction), so that the host never has to know how a motor is mounted: a positive wheel
 # velocity drives the robot forward on both sides.
 #
-# wrap: the wheel firmware keeps its position within one revolution (encoder rollover) and
-# jumps back at the end of it. The daemon counts the revolutions up again.
+# wrap: the wheel firmware keeps its position within plus or minus its encoder rollover (one
+# revolution here) and jumps by twice that, two revolutions, at either end. The daemon
+# counts the turns up again. The value is that jump: 2 * the firmware's `mrollover`.
 
 [[joint]]
 name = "left_wheel_joint"
@@ -29,7 +30,7 @@ id = 1
 gear_ratio = 1.0
 torque_constant = 0.5         # N m / A, VERIFY
 continuous = true
-wrap = 6.2831853              # rad: one revolution
+wrap = 12.5663706             # rad: the firmware position runs over +-1 revolution
 qd_max = 8.0
 qdd_max = 15.0
 tau_max = 8.0
