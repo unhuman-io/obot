@@ -337,4 +337,6 @@ class UiServer:
 def run(config: ToolsConfig, host: str = "0.0.0.0", port: int = 8080, token: str | None = None,
         joystick: str | None = None, cameras: bool = True) -> None:
     server = UiServer(config, token=token, joystick_path=joystick, cameras=cameras)
-    web.run_app(server.app(), host=host, port=port, print=lambda *_: None)
+    # Camera streams are responses that never end by themselves; do not wait a minute for
+    # them when asked to stop.
+    web.run_app(server.app(), host=host, port=port, print=lambda *_: None, shutdown_timeout=1.0)

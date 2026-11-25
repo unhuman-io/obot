@@ -29,6 +29,9 @@ the Python tools and both services (`obot-rtd`, `obot-ui`), and then runs the ch
 | `--firmware BOARD=PACKAGE.tgz` | load an obot-controller firmware package onto the motor board with that name or serial number, if it does not already run it (repeatable) |
 | `--verify-only` | change nothing, run the checks |
 
+Cameras read through `v4l2depth:` (a RealSense's depth stream) need `v4l2-ctl` on the
+robot (`sudo apt install v4l-utils`).
+
 The robot needs ssh with a key and passwordless sudo for the login user, and internet
 access the first time (the tools bring their own Python 3.12 through
 [uv](https://docs.astral.sh/uv/), since L4T R32 has Python 3.6). The checks: services

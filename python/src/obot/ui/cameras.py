@@ -7,6 +7,11 @@ Sources:
     sim:<link>:depth            and a few props, drawn by the operator page itself (needs
                                 [model]); for trying the page without cameras
     v4l2:/dev/video0            a V4L2 device: USB cameras, RealSense colour streams
+    v4l2depth:/dev/video1       a 16 bit depth stream in millimetres (V4L2 format Z16), drawn
+                                in false colour. This is how a RealSense D435 shows up on
+                                kernels that know its formats (the Jetson L4T kernels do):
+                                depth, infrared and colour as separate video devices, with
+                                nothing from Intel to install. Needs v4l2-ctl (v4l-utils).
     realsense:color             an Intel RealSense (D435, ...) through librealsense
     realsense:depth             (pip install pyrealsense2): the colour image, or the depth
     realsense:<serial>:depth    image drawn in false colour, near = warm. Add the serial
@@ -109,6 +114,38 @@ class _GstJpeg:
         self._process.wait()
 
 
+class _V4l2Raw:
+    """Raw frames of a fixed size from v4l2-ctl streaming to its standard output."""
+
+    def __init__(self, device: str, width: int, height: int, fps: int, pixelformat: str, bytes_per_pixel: int):
+        import subprocess
+
+        self._shape = (height, width)
+        self._size = width * height * bytes_per_pixel
+        self._process = subprocess.Popen(
+            ["v4l2-ctl", "-d", device, f"--set-fmt-video=width={width},height={height},pixelformat={pixelformat}",
+             f"--set-parm={fps}", "--stream-mmap", "--stream-to=-"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+
+    def read_depth_m(self) -> np.ndarray:
+        """The next frame as depth in metres; 0 where the camera has no reading."""
+        data = b""
+        while len(data) < self._size:
+            chunk = self._process.stdout.read(self._size - len(data))
+            if not chunk:
+                raise OSError("v4l2-ctl ended")
+            data += chunk
+        raw = np.frombuffer(data, dtype="<u2").reshape(self._shape)
+        depth = raw.astype(np.float32) * 0.001
+        depth[raw >= 65000] = 0    # the sensor's "no reading" at the top of its range
+        return depth
+
+    def release(self) -> None:
+        self._process.kill()
+        self._process.wait()
+
+
 class Camera:
     def __init__(self, config: CameraConfig):
         import cv2  # imported here so the rest of the package works without OpenCV
@@ -145,6 +182,8 @@ class Camera:
             return None
         if c.source.startswith("v4l2:"):
             cap = cv2.VideoCapture(c.source[5:], cv2.CAP_V4L2)
+            # MJPG where the camera has it (more frames over USB 2); cameras without it,
+            # like the D435's colour device, keep their own format.
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, c.width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, c.height)
@@ -152,6 +191,8 @@ class Camera:
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         elif c.source.startswith("gst:"):
             return _GstJpeg(c.source[4:])
+        elif c.source.startswith("v4l2depth:"):
+            return _V4l2Raw(c.source[10:], c.width, c.height, c.fps, "Z16 ", 2)
         else:
             raise ValueError(f"camera {c.name}: unknown source '{c.source}'")
         if not cap.isOpened():
@@ -191,6 +232,8 @@ class Camera:
                         self._sequence += 1
                         self._stamp = time.monotonic()
                     continue
+                elif c.source.startswith("v4l2depth:"):
+                    frame = depth_to_image(cap.read_depth_m())
                 elif c.source.startswith("realsense"):
                     parts = c.source.split(":")[1:]
                     stream = parts[-1] if parts and parts[-1] in ("color", "depth") else "color"

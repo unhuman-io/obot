@@ -66,3 +66,21 @@ name = "front"
 # The CSI camera on the Jetson Nano, through NVIDIA's camera source and JPEG encoder.
 source = "gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=15/1 ! nvjpegenc"
 fps = 15
+
+# An Intel RealSense D435 on a USB 3 port. The L4T kernel presents it as three video
+# devices (depth, infrared, colour); their numbers follow the order cameras were found in,
+# so check with `v4l2-ctl --list-devices` after changing what is plugged in.
+
+[[camera]]
+name = "d435"
+source = "v4l2:/dev/video3"
+width = 640
+height = 480
+fps = 15
+
+[[camera]]
+name = "d435_depth"
+source = "v4l2depth:/dev/video1"
+width = 640
+height = 480
+fps = 15

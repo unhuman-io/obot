@@ -233,3 +233,33 @@ def test_gstreamer_jpeg_stream_is_split_into_frames(monkeypatch):
     assert [source.read_jpeg() for _ in range(3)] == frames
     with pytest.raises(OSError):
         source.read_jpeg()
+
+
+def test_raw_depth_stream_is_split_into_frames(monkeypatch):
+    import io
+    import subprocess
+
+    import numpy as np
+
+    from obot.ui import cameras
+
+    frames = [np.full((2, 3), value, "<u2") for value in (500, 1500)]
+    frames[1][0, 0] = 65535                                      # no reading
+    frames[1][1, 2] = 0
+
+    class FakeProcess:
+        stdout = io.BufferedReader(io.BytesIO(b"".join(f.tobytes() for f in frames)), buffer_size=4)
+
+        def kill(self): ...
+        def wait(self): ...
+
+    started = {}
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **k: started.setdefault("args", args) and FakeProcess())
+    source = cameras._V4l2Raw("/dev/video9", 3, 2, 15, "Z16 ", 2)
+    assert "--set-fmt-video=width=3,height=2,pixelformat=Z16 " in started["args"]
+    assert source.read_depth_m() == pytest.approx(np.full((2, 3), 0.5))
+    second = source.read_depth_m()
+    assert second[0, 1] == pytest.approx(1.5)
+    assert second[0, 0] == 0 and second[1, 2] == 0               # both kinds of "no reading" are 0
+    with pytest.raises(OSError):
+        source.read_depth_m()
