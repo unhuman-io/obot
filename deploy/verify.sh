@@ -25,7 +25,10 @@ if [ "${OBOT_TOOLS:-1}" = 1 ]; then
     for _ in 1 2 3 4 5 6 7 8 9 10; do curl -sf -m 2 http://127.0.0.1:8080/api/info >/dev/null && break; sleep 1; done
     check "obot-ui service is active" "systemctl is-active obot-ui"
     check "operator page answers" "curl -sf -m 3 http://127.0.0.1:8080/api/info | grep -q '\"robot\"'"
-    check "robot is idle and healthy (obot status)" "sg obot -c '$HOME/obot-venv/bin/obot status'"
+    # The page and every script it loads are part of the installed package.
+    check "operator page has its scripts" "curl -sf -m 3 -o /dev/null http://127.0.0.1:8080/ && curl -sf -m 3 -o /dev/null http://127.0.0.1:8080/static/model.js && curl -sf -m 3 -o /dev/null http://127.0.0.1:8080/static/vendor/three.module.min.js"
+    # It has to say something too: a damaged (empty) program also exits with 0.
+    check "robot is idle and healthy (obot status)" "sg obot -c '$HOME/obot-venv/bin/obot status' | grep -q . && sg obot -c '$HOME/obot-venv/bin/obot status'"
 fi
 # Ten seconds of the control loop: no overruns, and the worst wake-up within a millisecond.
 if [ "${OBOT_TOOLS:-1}" = 1 ]; then

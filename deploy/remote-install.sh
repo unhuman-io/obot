@@ -42,7 +42,14 @@ if [ "${OBOT_TOOLS:-1}" = 1 ]; then
         [ -x "$HOME/obot-venv/bin/python" ] || "$HOME/.local/bin/uv" venv -q --python 3.12 "$HOME/obot-venv"
         install="$HOME/.local/bin/uv pip install -q -p $HOME/obot-venv --reinstall-package obot '"$here"'/python[ui,log]"
         # A robot without internet access can still be updated from what uv has cached.
-        $install 2>/dev/null || $install --offline
+        # If neither works the environment itself may be damaged (an install cut short by
+        # a power loss leaves empty files): build it again once.
+        $install 2>/dev/null || $install --offline 2>/dev/null || {
+            echo "python environment unusable, creating it again" >&2
+            rm -rf "$HOME/obot-venv"
+            "$HOME/.local/bin/uv" venv -q --python 3.12 "$HOME/obot-venv"
+            $install || $install --offline
+        }
     '
     sed "s|OBOT_USER|$user|g; s|/home/$user|$home|g" "$here/obot-ui.service" > /etc/systemd/system/obot-ui.service
 fi
@@ -73,6 +80,9 @@ if [ -s "$here/firmware/manifest" ]; then
     done < "$here/firmware/manifest"
 fi
 
+# Everything installed above is on the disk before anything is started: a robot that loses
+# power right after an install otherwise comes back with empty programs (seen on a Nano).
+sync
 systemctl daemon-reload
 systemctl enable -q obot-rtd
 systemctl restart obot-rtd

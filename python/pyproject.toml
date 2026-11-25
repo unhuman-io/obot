@@ -26,7 +26,7 @@ obot = "obot.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-obot = ["ui/static/*"]
+obot = ["ui/static/*", "ui/static/vendor/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
