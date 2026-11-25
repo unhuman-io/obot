@@ -6,9 +6,15 @@ LICENSE = "Unlicense & MIT"
 LIC_FILES_CHKSUM = " \
     file://${OBOT_SRC_DIR}/UNLICENSE.txt;md5=7246f848faa4e9c9fc0ea91122d6e680 \
     file://third_party/tomlplusplus/LICENSE;md5=90960f22c10049c117d56ed2ee5ee167 \
+    file://third_party/motor-realtime/UNLICENSE.txt;md5=1d267ceb3a8d8f75f1be3011ee4cbf53 \
 "
 
 inherit cmake externalsrc systemd useradd
+
+# motor-realtime (rt/third_party/motor-realtime, a git submodule: check out with
+# --recurse-submodules) carries all communication with the actuators and finds USB boards
+# through libudev.
+DEPENDS += "udev"
 
 EXTERNALSRC = "${OBOT_SRC_DIR}/rt"
 

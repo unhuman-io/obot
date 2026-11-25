@@ -56,7 +56,7 @@ enum class BaseMode : uint32_t {
 // RobotState::fault, robot-level.
 namespace robot_fault {
 inline constexpr uint32_t kJoint = 1u << 0;  // a joint fault, see joint_fault[]
-inline constexpr uint32_t kBus = 1u << 1;    // CAN controller error (bus off, ...)
+inline constexpr uint32_t kBus = 1u << 1;    // not raised at present (was: CAN controller error)
 inline constexpr uint32_t kEstop = 1u << 2;  // estop requested
 }  // namespace robot_fault
 

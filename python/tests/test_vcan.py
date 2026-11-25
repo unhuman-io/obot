@@ -45,9 +45,9 @@ def test_arm_and_base_over_socketcan(vcan_robot):
     assert robot.enable()
     command = robot.new_command()
     command["joint_mode"][:4] = JointMode.POSITION
-    command["q"][2] = 0.5                          # wrist pitch: cubemars frames on classic CAN
+    command["q"][2] = 0.5                          # wrist pitch
     command["base_mode"] = 1
-    command["base_v"] = 0.3                        # wheels: obot frames on CAN FD
+    command["base_v"] = 0.3                        # wheels
     deadline = time.monotonic() + 3
     while time.monotonic() < deadline:
         robot.send(command)

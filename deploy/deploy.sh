@@ -15,7 +15,7 @@
 #   --jump HOST      reach the robot through this ssh host
 #   --verify-only    change nothing, only run the checks
 #
-# Needs here: cmake, ninja, g++-aarch64-linux-gnu. On the robot: ssh with a key and
+# Needs here: cmake, ninja, git, g++-aarch64-linux-gnu (the first build fetches libudev-zero). On the robot: ssh with a key and
 # passwordless sudo. Running it again is safe. Exit status is that of the checks.
 set -eu
 cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0 firmware=""
@@ -56,6 +56,7 @@ echo "== building static aarch64 programs"
 build="${OBOT_DEPLOY_BUILD:-$HOME/.cache/obot-build/deploy-aarch64}"
 cmake -S "$repo/rt" -B "$build" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_SYSTEM_NAME=Linux \
     -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+    -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
     -DOBOT_RT_STATIC=ON -DOBOT_RT_BUILD_TESTS=OFF >/dev/null
 cmake --build "$build" | tail -1
 

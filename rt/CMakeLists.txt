@@ -13,13 +13,61 @@ endif()
 option(OBOT_RT_BUILD_TESTS "Build the tests" ON)
 option(OBOT_RT_WERROR "Treat warnings as errors" OFF)
 option(OBOT_RT_STATIC "Link the programs statically (runs on any aarch64 / x86_64 Linux, whatever its libc)" OFF)
+# Release 1.0.3, by commit so that what is fetched cannot change.
+set(OBOT_LIBUDEV_ZERO_REVISION "ee32ac5f6494047b9ece26e7a5920650cdf46655" CACHE STRING
+    "libudev-zero revision fetched for static builds")
 set(OBOT_RT_SANITIZE "" CACHE STRING "Sanitizers to build with, e.g. address,undefined or thread")
 
 include(GNUInstallDirs)
 find_package(Threads REQUIRED)
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/motor_messages/motor_messages.h")
-  message(FATAL_ERROR "third_party/motor_messages is empty: run 'git submodule update --init'")
+# --- motor-realtime: all communication with the actuators goes through this library -------
+# Built from the submodule with the source list of the library's own minimal ("embedded")
+# build: the motor manager and the transports, without motor_util and the rest.
+set(MR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/motor-realtime")
+if(NOT EXISTS "${MR}/include/motor_messages/motor_messages.h" OR NOT EXISTS "${MR}/3rdparty/obot-protocol/protocol_parser.cpp")
+  message(FATAL_ERROR "third_party/motor-realtime is incomplete: run 'git submodule update --init --recursive'")
+endif()
+add_library(motor_realtime STATIC
+  ${MR}/src/motor/motor_manager.cpp
+  ${MR}/src/motor/motor.cpp
+  ${MR}/src/motor/motor_can.cpp
+  ${MR}/src/motor/motor_ip.cpp
+  ${MR}/src/motor/motor_eth_l2.cpp
+  ${MR}/src/motor/motor_uart.cpp
+  ${MR}/src/motor/motor_uart_obot.cpp
+  ${MR}/src/motor/terminal.cpp
+  ${MR}/3rdparty/obot-protocol/protocol_parser.cpp
+)
+target_include_directories(motor_realtime SYSTEM PUBLIC ${MR}/include ${MR}/3rdparty/obot-protocol)
+target_compile_options(motor_realtime PRIVATE -w)   # not our code: its warnings are not ours to fix here
+target_link_libraries(motor_realtime PUBLIC Threads::Threads)
+# The library finds USB boards with libudev.
+if(OBOT_RT_STATIC)
+  # There is no static libudev to link (systemd does not provide one). libudev-zero is a
+  # small implementation of the same interface that reads /sys directly.
+  include(FetchContent)
+  FetchContent_Declare(libudev_zero
+    GIT_REPOSITORY https://github.com/illiliti/libudev-zero.git
+    GIT_TAG ${OBOT_LIBUDEV_ZERO_REVISION})
+  FetchContent_MakeAvailable(libudev_zero)   # sources only: it has no CMake build of its own
+  enable_language(C)
+  file(GLOB UDEV_ZERO_SOURCES ${libudev_zero_SOURCE_DIR}/udev*.c)
+  add_library(udev_zero STATIC ${UDEV_ZERO_SOURCES})
+  target_compile_options(udev_zero PRIVATE -w -D_XOPEN_SOURCE=700)
+  # The library's header is udev.h; programs include <libudev.h>.
+  file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/udev_zero)
+  file(COPY_FILE ${libudev_zero_SOURCE_DIR}/udev.h ${CMAKE_CURRENT_BINARY_DIR}/udev_zero/libudev.h ONLY_IF_DIFFERENT)
+  target_include_directories(udev_zero SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/udev_zero)
+  target_link_libraries(motor_realtime PUBLIC udev_zero)
+else()
+  find_library(UDEV_LIBRARY udev)
+  find_path(UDEV_INCLUDE_DIR libudev.h)
+  if(NOT UDEV_LIBRARY OR NOT UDEV_INCLUDE_DIR)
+    message(FATAL_ERROR "libudev is needed by motor-realtime: install libudev-dev (Debian, Ubuntu) or systemd-devel")
+  endif()
+  target_include_directories(motor_realtime SYSTEM PUBLIC ${UDEV_INCLUDE_DIR})
+  target_link_libraries(motor_realtime PUBLIC ${UDEV_LIBRARY})
 endif()
 
 add_library(obot_warnings INTERFACE)
@@ -33,23 +81,20 @@ if(OBOT_RT_SANITIZE)
 endif()
 
 add_library(obot_rt STATIC
-  src/actuator/cubemars_driver.cpp
+  src/actuator/motors.cpp
   src/actuator/obot_driver.cpp
-  src/can/fake_bus.cpp
-  src/can/socketcan_bus.cpp
-  src/can/usbrt_bus.cpp
   src/ipc/layout_json.cpp
   src/ipc/shm_region.cpp
   src/robot/config.cpp
   src/robot/runtime.cpp
-  src/robot/sim_factory.cpp
+  src/robot/motor_factory.cpp
   src/rt/realtime.cpp
   src/sim/devices.cpp
 )
 target_include_directories(obot_rt PUBLIC include)
-# The wire structs come from the firmware's own header; toml++ is only used by config.cpp.
-target_include_directories(obot_rt SYSTEM PUBLIC third_party/motor_messages PRIVATE third_party/tomlplusplus)
-target_link_libraries(obot_rt PUBLIC Threads::Threads PRIVATE obot_warnings)
+# toml++ is only used by config.cpp.
+target_include_directories(obot_rt SYSTEM PRIVATE third_party/tomlplusplus)
+target_link_libraries(obot_rt PUBLIC motor_realtime Threads::Threads PRIVATE obot_warnings)
 
 foreach(app obot_rtd obot_sim_node obot_rt_latency)
   string(REPLACE "_" "-" exe ${app})

@@ -1,12 +1,11 @@
-// One actuator on a CAN bus, seen in joint space (radians, rad/s, N m at the joint).
-// A driver turns a joint command into the one frame sent each cycle and turns the
-// actuator's reply back into a joint status. Drivers do no I/O themselves.
+// One actuator seen in joint space (radians, rad/s, N m at the joint): what the control
+// cycle asks of it and what it reports. obot_driver.h turns these into the firmware's
+// MotorCommand and back from its MotorStatus; motors.h carries those to the actuators.
 #pragma once
 
 #include <cstdint>
 #include <limits>
 
-#include "obot/can/frame.h"
 #include "obot/ipc/layout.h"
 
 namespace obot::actuator {
@@ -33,40 +32,12 @@ struct DriveStatus {
     uint64_t rx_count = 0;
 };
 
-// What a joint needs to know about its transmission, common to every driver.
+// What a joint needs to know about its transmission.
 struct Transmission {
     float gear_ratio = 1;       // motor turns per joint turn
     float torque_constant = 1;  // N m per A at the motor
     float direction = 1;        // +1 or -1: joint positive direction relative to the drive's
     float zero_offset = 0;      // joint angle, in the drive's frame, that the robot calls 0, rad
-};
-
-class Driver {
- public:
-    virtual ~Driver() = default;
-
-    // The frame to send this cycle. `poll_only` asks for a status without commanding
-    // anything (used before the robot has taken control of the actuator).
-    virtual void make_frame(const DriveCommand& command, bool poll_only, uint32_t cycle, can::Frame& out) = 0;
-
-    // The frame from the last make_frame() could not be queued on the bus.
-    virtual void send_failed() {}
-
-    // Identifier of the status frames this driver consumes.
-    virtual uint32_t rx_id() const = 0;
-
-    // Parse a frame with id rx_id(). false if it was not a valid status from this actuator.
-    virtual bool on_frame(const can::Frame& frame) = 0;
-
-    // Worst-case payload sizes, for the bus budget.
-    virtual unsigned tx_len() const = 0;
-    virtual unsigned rx_len() const = 0;
-    virtual bool uses_fd() const = 0;
-
-    const DriveStatus& status() const { return status_; }
-
- protected:
-    DriveStatus status_;
 };
 
 }  // namespace obot::actuator

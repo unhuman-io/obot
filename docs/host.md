@@ -14,10 +14,12 @@ What runs on the robot's computer, without ROS.
         +-----------------------------------------------+
                               ^
                               |   rt/   obot-rtd: one SCHED_FIFO thread on an isolated CPU
-                              |   cycle: commands -> limits -> frames out -> statuses in -> state
+                              |   cycle: commands -> limits -> motor commands out -> statuses in -> state
         +---------------------+---------------------+
-        |  SocketCAN (classic, FD)  |  usb_rt (USB) |  built-in simulated actuators
-        +---------------------------+---------------+
+        |  motor-realtime library: Motor / MotorManager |   all motor communication
+        +-----------------------------------------------+
+        |  CAN FD (MotorCAN)  |  USB (usb_rt)  |  simulated motors
+        +---------------------+----------------+
 ```
 
 - **`rt/`** is the only code that touches actuators. `obot-rtd` reads a robot description
@@ -34,7 +36,7 @@ What runs on the robot's computer, without ROS.
 
 ```sh
 sudo apt install cmake ninja-build g++ python3-venv
-git submodule update --init
+git submodule update --init --recursive
 cd rt && cmake --preset release && cmake --build --preset release && ctest --preset release
 B=$PWD/build/release
 
@@ -67,7 +69,7 @@ $B/obot-rtd --config ../config/obot3.toml $M
 | `--cpu N`, `--no-rt` | override the control CPU; run without realtime setup |
 | `--stats-json FILE`, `--duration SEC` | timing statistics on exit; run for a fixed time |
 | `obot-rt-latency --cpu 5 --duration 60` | wake-up latency of a realtime thread on this machine |
-| `obot-sim-node --config FILE` | simulated actuators on SocketCAN interfaces |
+| `obot-sim-node --config FILE` | simulated actuators on CAN interfaces (vcan): the firmware's side of the protocol, for testing against the library's CAN code |
 
 ### Modes
 
@@ -94,10 +96,33 @@ any mode and is never displaced by another request.
 
 ### Actuators
 
-| driver | bus | notes |
+Every actuator runs the obot-controller firmware and is reached through the
+[motor-realtime](https://github.com/unhuman-io/motor-realtime) library, which is built
+into `obot-rtd` from the submodule `rt/third_party/motor-realtime`. The daemon contains
+no protocol code of its own: it fills in the firmware's `MotorCommand`, hands it to the
+library's `Motor` for that actuator, and takes the `MotorStatus` the library read. A
+change of transport or wire format is made in motor-realtime, followed by moving the
+submodule to that commit.
+
+| bus `interface` | library class | found by |
 |---|---|---|
-| `obot` | CAN FD, or USB (`interface = "usbrt"`) | obot-controller firmware. Position and impedance use the firmware's STATE controller with gains converted to motor units; velocity uses VELOCITY; torque uses CURRENT. |
-| `cubemars_mit` | classic CAN, 1 Mbit/s | CubeMars AK actuators with their stock driver in MIT mode. **Not yet run against hardware.** The value ranges (`cubemars = {...}`) are per model: copy them from the manual. |
+| a CAN FD interface, e.g. `can0` | `MotorCAN` | the joint's `id` on that interface |
+| `usbrt` | `Motor` on the `usb_rt` kernel driver | the board's name (`usb_name`, default: the joint's name) |
+| `sim` | a simulated `Motor` inside the daemon | - |
+
+What the daemon adds is the joint's view: position and impedance use the firmware's STATE
+controller with gains converted to motor units, velocity uses VELOCITY, torque uses
+CURRENT, idle is DAMPED (or OPEN).
+
+Each cycle it writes every command (over CAN as "command, reply with your status"), waits
+with the library's `multipoll` until all motors have answered or the receive deadline
+passes, and reads. Things to know:
+
+- All motors have to be there when the daemon starts; it exits with a message naming the
+  missing one, and systemd starts it again.
+- Over CAN the library keeps a lock file per node in `/tmp` (`obot.can0:3.lock`). One left
+  behind by `motor_util` run as another user keeps the daemon from opening the node:
+  remove it.
 
 ### How many joints fit on a CAN bus
 
@@ -106,8 +131,7 @@ if a bus would be more than `max_bus_load` busy in the worst case:
 
 | frames per joint | worst case on the wire | joints per bus at 1 kHz (70 %) |
 |---|---|---|
-| CubeMars MIT, 2 x 8 bytes classic at 1 Mbit/s | 270 us | 2 |
-| obot, 48 + 64 bytes CAN FD at 1 / 5 Mbit/s | 307 us | 2 |
+| 48 + 64 bytes CAN FD at 1 / 5 Mbit/s | 307 us | 2 |
 
 So the 1 kHz configuration in `obot3.toml` uses three buses for six joints. The
 alternatives are a 2 ms period, a higher data bit rate, or a firmware change that puts
@@ -235,7 +259,7 @@ its picture and shows the `xyz` and `rpy` to put in the configuration. Things to
 ## Bringing up a real robot
 
 1. Fill in everything marked `VERIFY` in the robot's configuration: ids, directions,
-   zero offsets, torque constants, and for CubeMars actuators the frame ranges.
+   zero offsets, torque constants.
 2. `obot-rtd --check --config FILE`.
 3. Start with the arm unpowered or supported and low gains. `obot status` must show every
    joint reporting and plausible angles before `obot enable`.

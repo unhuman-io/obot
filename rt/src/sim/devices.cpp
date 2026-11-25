@@ -1,16 +1,12 @@
 #include "obot/sim/devices.h"
 
-#include <algorithm>
-#include <cmath>
-#include <cstring>
+#include <fcntl.h>
 
-#include "obot/wire/obot_messages.h"
-#include "obot/actuator/obot_driver.h"
+#include <algorithm>
+#include <cerrno>
+#include <cmath>
 
 namespace obot::sim {
-
-using actuator::CubeMarsDriver;
-namespace oc = actuator::obot_can;
 
 void JointPlant::step(float tau, float dt) {
     const float acc = (tau - p_.damping * qd - p_.gravity * std::sin(q)) / p_.inertia;
@@ -35,31 +31,18 @@ ObotDeviceSim::ObotDeviceSim(const ObotDeviceParams& params) : p_(params), plant
     velocity_ki_ = w * w * p_.plant.inertia / torque_per_amp / p_.gear_ratio;
 }
 
-bool ObotDeviceSim::accepts(uint32_t can_id) const {
-    const uint32_t address = can_id & 0x7f;
-    const uint32_t message = can_id >> 7;
-    return address == p_.address && (message == oc::kCmd || message == oc::kCmdStatus || message == oc::kStatus);
-}
-
-void ObotDeviceSim::on_frame(const can::Frame& frame, can::Bus& bus) {
-    const uint32_t message = frame.id >> 7;
-    if (message == oc::kStatus) {
-        if (frame.len == 0) send_status(bus);
-        return;
-    }
-    MotorCommand mc{};
-    std::memcpy(&mc, frame.data, std::min<size_t>(frame.len, sizeof(mc)));
+void ObotDeviceSim::on_command(const MotorCommand& mc) {
     since_command_s_ = 0;
     first_command_ = true;
     host_timestamp_ = mc.host_timestamp;
     if (!safe_mode_) {
-        std::memcpy(command_, &mc, sizeof(mc));
+        command_ = mc;
         if (mode_ != mc.mode_desired) {
             velocity_integral_ = 0;
             mode_ = mc.mode_desired;
         }
     } else if (mc.mode_desired == CLEAR_FAULTS) {
-        std::memcpy(command_, &mc, sizeof(mc));
+        command_ = mc;
         first_command_ = false;
         mode_ = CLEAR_FAULTS;
     }
@@ -67,7 +50,6 @@ void ObotDeviceSim::on_frame(const can::Frame& frame, can::Bus& bus) {
         error_ = 0;
         safe_mode_ = false;
     }
-    if (message == oc::kCmdStatus) send_status(bus);
 }
 
 void ObotDeviceSim::step(float dt) {
@@ -82,8 +64,7 @@ void ObotDeviceSim::step(float dt) {
         mode_ = DAMPED;
     }
 
-    MotorCommand mc;
-    std::memcpy(&mc, command_, sizeof(mc));
+    const MotorCommand& mc = command_;
     const float motor_position = plant_.q * p_.gear_ratio;
     const float motor_velocity = plant_.qd * p_.gear_ratio;
     float iq = 0;
@@ -114,9 +95,9 @@ void ObotDeviceSim::step(float dt) {
     plant_.step(iq_ * p_.torque_constant * p_.gear_ratio, dt);
 }
 
-void ObotDeviceSim::send_status(can::Bus& bus) {
-    if (silent_) return;
-    MotorStatusRegular ms{};
+bool ObotDeviceSim::make_status(MotorStatus& ms) {
+    if (silent_) return false;
+    ms = MotorStatus{};
     ms.mcu_timestamp = mcu_timestamp_;
     ms.host_timestamp_received = host_timestamp_;
     ms.motor_position = plant_.q * p_.gear_ratio;
@@ -134,82 +115,42 @@ void ObotDeviceSim::send_status(can::Bus& bus) {
     ms.rr_data.type = FLOAT;
     ms.rr_data.data = ms.rr_data.index == BUS_VOLTAGE_INDEX ? p_.bus_voltage : p_.temperature;
     rr_index_ = static_cast<uint8_t>((rr_index_ + 1) % 3);
-
-    can::Frame out;
-    out.id = oc::can_id(oc::kStatus, p_.address);
-    out.fd = true;
-    out.brs = true;
-    if (p_.lite_status) {
-        out.set_payload(&ms, sizeof(MotorStatusLite), 48);
-    } else {
-        out.set_payload(&ms, sizeof(ms), 64);
-    }
-    bus.send(out);
+    return true;
 }
 
 // ---------------------------------------------------------------------------------------
 
-CubeMarsDeviceSim::CubeMarsDeviceSim(const CubeMarsDeviceParams& params) : p_(params), plant_(params.plant) {}
-
-void CubeMarsDeviceSim::on_frame(const can::Frame& frame, can::Bus& bus) {
-    if (frame.len != 8) return;
-    if (CubeMarsDriver::is_special(frame.data, CubeMarsDriver::kEnterMotorMode)) {
-        motor_mode_ = true;
-        p_des_ = v_des_ = kp_ = kd_ = t_ff_ = 0;
-    } else if (CubeMarsDriver::is_special(frame.data, CubeMarsDriver::kExitMotorMode)) {
-        motor_mode_ = false;
-    } else if (motor_mode_) {
-        CubeMarsDriver::unpack_mit(frame.data, p_.ranges, p_des_, v_des_, kp_, kd_, t_ff_);
-    }
-    const auto& r = p_.ranges;
-    const uint32_t pi = CubeMarsDriver::to_uint(plant_.q, -r.p_max, r.p_max, 16);
-    const uint32_t vi = CubeMarsDriver::to_uint(plant_.qd, -r.v_max, r.v_max, 12);
-    const uint32_t ti = CubeMarsDriver::to_uint(tau_, -r.t_max, r.t_max, 12);
-    can::Frame out;
-    out.id = p_.reply_id ? p_.reply_id : p_.id;
-    out.len = 8;
-    out.data[0] = p_.id;
-    out.data[1] = static_cast<uint8_t>(pi >> 8);
-    out.data[2] = static_cast<uint8_t>(pi & 0xff);
-    out.data[3] = static_cast<uint8_t>(vi >> 4);
-    out.data[4] = static_cast<uint8_t>(((vi & 0xf) << 4) | (ti >> 8));
-    out.data[5] = static_cast<uint8_t>(ti & 0xff);
-    out.data[6] = static_cast<uint8_t>(static_cast<int8_t>(p_.temperature));
-    out.data[7] = error_;
-    bus.send(out);
+SimMotor::SimMotor(const std::string& name, const ObotDeviceParams& params) : device_(params) {
+    name_ = name;
+    dev_path_ = "sim";
+    board_name_ = "simulated";
+    messages_version_ = MOTOR_MESSAGES_VERSION;
+    // Something the library can poll: always readable, like a drive that has answered.
+    fd_ = ::open("/dev/zero", O_RDONLY | O_CLOEXEC);
+    fd_flags_ = 0;
 }
 
-void CubeMarsDeviceSim::step(float dt) {
-    tau_ = 0;
-    if (motor_mode_) {
-        tau_ = kp_ * (p_des_ - plant_.q) + kd_ * (v_des_ - plant_.qd) + t_ff_;
-        tau_ = std::clamp(tau_, -p_.ranges.t_max, p_.ranges.t_max);
+ssize_t SimMotor::write() {
+    if (fail_writes_ > 0) {
+        --fail_writes_;
+        errno = ENOBUFS;
+        return -1;
     }
-    plant_.step(tau_, dt);
+    if (powered_) {
+        device_.on_command(command_);
+        pending_ = device_.make_status(reply_);
+    }
+    return sizeof(command_);
 }
 
-// ---------------------------------------------------------------------------------------
-
-int DeviceBus::pump() {
-    can::Frame frames[32];
-    int handled = 0;
-    for (;;) {
-        const int n = bus_.recv(frames, 32);
-        if (n == 0) break;
-        for (int i = 0; i < n; ++i) {
-            for (auto& d : devices_) {
-                if (d->accepts(frames[i].id)) {
-                    d->on_frame(frames[i], bus_);
-                    ++handled;
-                }
-            }
-        }
+ssize_t SimMotor::read() {
+    if (!pending_) {
+        errno = EAGAIN;
+        return -1;
     }
-    return handled;
-}
-
-void DeviceBus::step(float dt) {
-    for (auto& d : devices_) d->step(dt);
+    status_ = reply_;
+    pending_ = false;
+    return sizeof(status_);
 }
 
 }  // namespace obot::sim

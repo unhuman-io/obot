@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-#include "obot/actuator/cubemars_driver.h"
 #include "obot/actuator/driver.h"
 #include "obot/sim/devices.h"
 
@@ -13,8 +12,9 @@ namespace obot::robot {
 
 struct BusConfig {
     std::string name;
-    // SocketCAN interface; "usbrt" for boards on the usb_rt driver; "sim" for built-in
-    // simulated actuators.
+    // CAN FD interface ("can0"); "usbrt" for boards on the usb_rt driver; "sim" for
+    // built-in simulated actuators. In every case the motors are reached through
+    // motor-realtime.
     std::string interface;
     bool usb = false;  // configured as "usbrt" (kept when the interface is overridden for simulation)
     bool fd = true;
@@ -22,12 +22,9 @@ struct BusConfig {
     double data_bitrate = 5'000'000;
 };
 
-enum class DriverKind { Obot, CubeMarsMit };
-
 struct JointConfig {
     std::string name;
     std::string bus;
-    DriverKind driver = DriverKind::Obot;
     int id = 1;
     int bus_index = 0;     // filled in by the loader
     std::string usb_name;  // on a "usbrt" bus: the board's name, defaults to the joint name
@@ -37,8 +34,6 @@ struct JointConfig {
     bool output_encoder = false;
     bool torque_sensor = false;
     float damped_kd = 0;
-    actuator::CubeMarsRanges cubemars;
-    uint32_t reply_id = 0;
 
     bool continuous = false;  // no position limits (wheels)
     float q_min = 0;          // commands are clamped to q_min..q_max
@@ -97,9 +92,6 @@ RobotConfig parse_config(const std::string& toml_text, const std::string& source
 // Command line overrides: run every bus on built-in simulated actuators, or move named
 // buses to other interfaces ("arm_a=vcan0"). Throws std::runtime_error on an unknown bus.
 void override_interfaces(RobotConfig& config, bool all_sim, const std::vector<std::string>& assignments);
-
-// Identifiers of the status frames expected on a bus, for the receive filter.
-std::vector<uint32_t> rx_ids(const RobotConfig& config, int bus_index);
 
 struct BusLoad {
     std::string bus;

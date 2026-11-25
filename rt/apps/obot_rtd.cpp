@@ -19,14 +19,12 @@
 #include <thread>
 #include <vector>
 
-#include "obot/can/fake_bus.h"
-#include "obot/can/socketcan_bus.h"
-#include "obot/can/usbrt_bus.h"
+#include "obot/actuator/motors.h"
+#include "obot/robot/motor_factory.h"
 #include "obot/ipc/layout_json.h"
 #include "obot/ipc/shm_region.h"
 #include "obot/robot/config.h"
 #include "obot/robot/runtime.h"
-#include "obot/robot/sim_factory.h"
 #include "obot/rt/clock.h"
 #include "obot/rt/realtime.h"
 #include "obot/sim/devices.h"
@@ -118,11 +116,8 @@ bool parse(int argc, char** argv, Options& o) {
 // Everything the control thread touches.
 struct Loop {
     robot::RobotConfig config;
-    std::vector<std::unique_ptr<can::Bus>> real_buses;
-    std::vector<std::unique_ptr<can::FakeBusPair>> sim_pairs;
-    std::vector<std::unique_ptr<sim::DeviceBus>> sim_buses;
-    std::vector<can::Bus*> buses;
-    std::vector<pollfd> fds;
+    std::unique_ptr<actuator::Motors> motors;  // every actuator, through motor-realtime
+    std::vector<sim::SimMotor*> simulated;     // those of them that are simulated
     std::unique_ptr<robot::Runtime> runtime;
     ipc::ShmRegion* shm = nullptr;
     rt::Histogram latency;
@@ -172,21 +167,11 @@ struct Loop {
             }
             runtime->begin_cycle(timing, have_command ? &command : nullptr);
 
-            // Simulated actuators answer immediately; real ones are waited for.
-            for (auto& sb : sim_buses) {
-                sb->pump();
-                sb->step(dt);
-            }
-            int missing = runtime->poll_rx(rt::monotonic_ns());
-            const int64_t deadline = next + rx_deadline;
-            while (missing > 0 && !fds.empty()) {
-                const int64_t remaining = deadline - rt::monotonic_ns();
-                if (remaining <= 0) break;
-                const timespec timeout = rt::to_timespec(remaining);
-                const int ready = ppoll(fds.data(), fds.size(), &timeout, nullptr);
-                if (ready < 0 && errno != EINTR) break;
-                missing = runtime->poll_rx(rt::monotonic_ns());
-            }
+            // Simulated actuators have answered already; real ones are waited for, until
+            // all have or the receive deadline passes.
+            for (sim::SimMotor* motor : simulated) motor->step(dt);
+            motors->wait(next + rx_deadline - rt::monotonic_ns());
+            runtime->poll_rx(rt::monotonic_ns());
 
             const int64_t end = rt::monotonic_ns();
             runtime->end_cycle(end, state);
@@ -270,36 +255,10 @@ int main(int argc, char** argv) {
     }
 
     try {
-        for (size_t b = 0; b < config.buses.size(); ++b) {
-            const robot::BusConfig& bc = config.buses[b];
-            if (bc.interface == "sim") {
-                loop.sim_pairs.push_back(std::make_unique<can::FakeBusPair>(bc.name));
-                auto device_bus = std::make_unique<sim::DeviceBus>(loop.sim_pairs.back()->device());
-                for (const robot::JointConfig& j : config.joints) {
-                    if (j.bus_index == static_cast<int>(b)) device_bus->add(robot::make_sim_device(j, config));
-                }
-                loop.sim_buses.push_back(std::move(device_bus));
-                loop.buses.push_back(&loop.sim_pairs.back()->host());
-            } else {
-                if (bc.interface == "usbrt") {
-                    std::vector<can::UsbRtDevice> boards;
-                    for (const robot::JointConfig& j : config.joints) {
-                        if (j.bus_index == static_cast<int>(b)) {
-                            boards.push_back(can::UsbRtDevice{static_cast<uint8_t>(j.id), j.usb_name});
-                        }
-                    }
-                    loop.real_buses.push_back(std::make_unique<can::UsbRtBus>(bc.name, boards));
-                } else {
-                    loop.real_buses.push_back(std::make_unique<can::SocketCanBus>(
-                        bc.name, bc.interface, bc.fd, robot::rx_ids(config, static_cast<int>(b))));
-                }
-                loop.buses.push_back(loop.real_buses.back().get());
-                std::vector<int> bus_fds;
-                loop.real_buses.back()->append_fds(bus_fds);
-                for (int fd : bus_fds) loop.fds.push_back(pollfd{fd, POLLIN, 0});
-            }
-        }
-        loop.runtime = std::make_unique<robot::Runtime>(config, loop.buses);
+        robot::OpenedMotors opened = robot::open_motors(config);
+        loop.simulated = opened.simulated;
+        loop.motors = std::make_unique<actuator::Motors>(std::move(opened.motors));
+        loop.runtime = std::make_unique<robot::Runtime>(config, *loop.motors);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "obot-rtd: %s\n", e.what());
         return 1;

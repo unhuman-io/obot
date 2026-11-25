@@ -20,7 +20,6 @@ interface = "sim"
 [[bus]]
 name = "b"
 interface = "can7"
-fd = false
 
 [[joint]]
 name = "j1"
@@ -39,7 +38,6 @@ kd = 1
 [[joint]]
 name = "j2"
 bus = "b"
-driver = "cubemars_mit"
 id = 2
 q_min = -1
 q_max = 1
@@ -91,7 +89,6 @@ TEST_CASE("a valid configuration loads with defaults filled in") {
     CHECK(c.joints.size() == 4);
     CHECK(c.joints[0].transmission.gear_ratio == 9);
     CHECK(c.joints[0].bus_index == 0);
-    CHECK(c.joints[1].driver == DriverKind::CubeMarsMit);
     CHECK(c.joints[1].bus_index == 1);
     CHECK(c.joints[0].kp_max == 80);    // 4 * kp when not given
     CHECK(c.rt.rx_deadline_us == 600);  // 60 % of the period when not given
@@ -110,17 +107,19 @@ TEST_CASE("mistakes are reported with the place they were made") {
     // Two actuators with the same id on one bus.
     CHECK(error_of(replaced(kGood, "name = \"wl\"\nbus = \"a\"\nid = 2", "name = \"wl\"\nbus = \"a\"\nid = 1"))
               .find("already used") != std::string::npos);
-    // The obot protocol is CAN FD only.
-    CHECK(error_of(replaced(kGood, "name = \"wl\"\nbus = \"a\"", "name = \"wl\"\nbus = \"b\"")).find("CAN FD") !=
+    // The actuators' protocol is CAN FD only.
+    CHECK(error_of(replaced(kGood, "interface = \"can7\"", "interface = \"can7\"\nfd = false")).find("CAN FD") !=
           std::string::npos);
     CHECK(error_of(replaced(kGood, "q_max = 1\nqd_max = 2", "q_max = -2\nqd_max = 2")).find("q_max") !=
           std::string::npos);
     CHECK(error_of(replaced(kGood, "direction = -1", "direction = 0.5")).find("direction") != std::string::npos);
     CHECK(error_of(replaced(kGood, "left = \"wl\"", "left = \"j1\"")).find("continuous") != std::string::npos);
-    // Gains the cubemars frame cannot express.
-    CHECK(error_of(replaced(kGood, "id = 2\nq_min = -1\nq_max = 1\nkp = 20",
-                            "id = 2\nq_min = -1\nq_max = 1\nkp_max = 600\nkp = 20"))
-              .find("cubemars") != std::string::npos);
+    // There is one kind of actuator; the MIT-mode CubeMars driver is gone.
+    CHECK(error_of(replaced(kGood, "bus = \"b\"\nid = 2", "bus = \"b\"\ndriver = \"cubemars_mit\"\nid = 2"))
+              .find("unknown driver") != std::string::npos);
+    CHECK(
+        parse_config(replaced(kGood, "bus = \"b\"\nid = 2", "bus = \"b\"\ndriver = \"obot\"\nid = 2")).joints.size() ==
+        4);
     CHECK(error_of(replaced(kGood, "gear_ratio = 9", "gear_ratio = 9\noutput_encoder = true")).find("output_encoder") !=
           std::string::npos);
     CHECK(error_of("this is not toml").find("cfg:1") != std::string::npos);
@@ -132,15 +131,15 @@ TEST_CASE("bus load") {
     REQUIRE(loads.size() == 2);
     CHECK(loads[0].frames == 6);  // three obot joints on bus a
     CHECK(loads[1].frames == 2);
-    CHECK(loads[1].busy_s == doctest::Approx(270e-6));  // two classic 8 byte frames
-    CHECK(loads[0].load > 0.8);                         // three obot joints do not fit in 1 ms with margin
-    CHECK(loads[1].load == doctest::Approx(0.27));
+    CHECK(loads[1].busy_s == doctest::Approx(307e-6).epsilon(0.01));  // a 48 byte command and a 64 byte status
+    CHECK(loads[0].load > 0.8);                                       // three joints do not fit in 1 ms with margin
+    CHECK(loads[1].load == doctest::Approx(0.307).epsilon(0.01));
 
     c.period_us = 2000;
     CHECK(bus_loads(c)[0].load < 0.5);
 }
 
-TEST_CASE("interface overrides and receive filters") {
+TEST_CASE("interface overrides") {
     RobotConfig c = parse_config(kGood);
     override_interfaces(c, false, {"b=vcan3"});
     CHECK(c.buses[1].interface == "vcan3");
@@ -148,9 +147,4 @@ TEST_CASE("interface overrides and receive filters") {
     CHECK_THROWS_AS(override_interfaces(c, false, {"b"}), std::runtime_error);
     override_interfaces(c, true, {});
     CHECK(c.buses[1].interface == "sim");
-
-    const auto a = rx_ids(c, 0);
-    REQUIRE(a.size() == 3);
-    CHECK(a[0] == ((3u << 7) | 1u));
-    CHECK(rx_ids(c, 1) == std::vector<uint32_t>{2});
 }

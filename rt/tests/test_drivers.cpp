@@ -1,48 +1,20 @@
+// Joint space <-> the firmware's messages, and the path those messages take: through
+// motor-realtime's Motor and MotorManager, here with simulated motors on the other end.
 #include "doctest.h"
 
 #include <cmath>
-#include <cstring>
+#include <memory>
+#include <stdexcept>
+#include <vector>
 
-#include "obot/wire/obot_messages.h"
-#include "obot/actuator/cubemars_driver.h"
+#include "obot/actuator/motors.h"
 #include "obot/actuator/obot_driver.h"
-#include "obot/can/fake_bus.h"
 #include "obot/sim/devices.h"
 
 using namespace obot;
-using actuator::CubeMarsDriver;
 using actuator::DriveCommand;
 using actuator::ObotDriver;
 using ipc::JointMode;
-
-namespace {
-MotorCommand decode(const can::Frame& f) {
-    MotorCommand mc{};
-    std::memcpy(&mc, f.data, sizeof(mc));
-    return mc;
-}
-}  // namespace
-
-TEST_CASE("obot driver: frame ids and sizes follow the firmware's CAN protocol") {
-    actuator::ObotDriverConfig cfg;
-    cfg.address = 5;
-    ObotDriver d(cfg);
-    can::Frame f;
-
-    d.make_frame(DriveCommand{}, true, 1, f);  // status request
-    CHECK(f.id == ((3u << 7) | 5u));
-    CHECK(f.len == 0);
-    CHECK(f.fd);
-
-    d.make_frame(DriveCommand{}, false, 77, f);  // command, asks for a status back
-    CHECK(f.id == ((2u << 7) | 5u));
-    CHECK(f.len == 48);
-    CHECK(f.fd);
-    CHECK(f.brs);
-    CHECK(decode(f).host_timestamp == 77);
-    CHECK(decode(f).mode_desired == DAMPED);
-    CHECK(d.rx_id() == ((3u << 7) | 5u));
-}
 
 TEST_CASE("obot driver: joint units are converted to motor units") {
     actuator::ObotDriverConfig cfg;
@@ -51,7 +23,11 @@ TEST_CASE("obot driver: joint units are converted to motor units") {
     cfg.transmission.direction = -1;
     cfg.transmission.zero_offset = 0.5f;
     ObotDriver d(cfg);
-    can::Frame f;
+    MotorCommand mc;
+
+    d.fill(DriveCommand{}, 77, mc);  // nothing asked: idle, which is DAMPED unless configured open
+    CHECK(mc.host_timestamp == 77);
+    CHECK(mc.mode_desired == DAMPED);
 
     DriveCommand c;
     c.mode = JointMode::Impedance;
@@ -60,8 +36,7 @@ TEST_CASE("obot driver: joint units are converted to motor units") {
     c.kp = 100.0f;  // N m / rad at the joint
     c.kd = 4.0f;
     c.tau = 3.0f;
-    d.make_frame(c, false, 0, f);
-    const MotorCommand mc = decode(f);
+    d.fill(c, 0, mc);
     CHECK(mc.mode_desired == STATE);
     CHECK(mc.state.position_desired == doctest::Approx(-10.0f * 1.5f));
     CHECK(mc.state.velocity_desired == doctest::Approx(-20.0f));
@@ -72,30 +47,33 @@ TEST_CASE("obot driver: joint units are converted to motor units") {
     CHECK(mc.state.current_desired == doctest::Approx(-3.0f));
 
     c.mode = JointMode::Torque;
-    d.make_frame(c, false, 0, f);
-    CHECK(decode(f).mode_desired == CURRENT);
-    CHECK(decode(f).current_desired == doctest::Approx(-3.0f));
+    d.fill(c, 0, mc);
+    CHECK(mc.mode_desired == CURRENT);
+    CHECK(mc.current_desired == doctest::Approx(-3.0f));
 
     c.mode = JointMode::Velocity;
-    d.make_frame(c, false, 0, f);
-    CHECK(decode(f).mode_desired == VELOCITY);
-    CHECK(decode(f).velocity_desired == doctest::Approx(-20.0f));
+    d.fill(c, 0, mc);
+    CHECK(mc.mode_desired == VELOCITY);
+    CHECK(mc.velocity_desired == doctest::Approx(-20.0f));
 
     c.clear_faults = true;
-    d.make_frame(c, false, 0, f);
-    CHECK(decode(f).mode_desired == CLEAR_FAULTS);
+    d.fill(c, 0, mc);
+    CHECK(mc.mode_desired == CLEAR_FAULTS);
+
+    cfg.idle_damped = false;
+    ObotDriver(cfg).fill(DriveCommand{}, 0, mc);
+    CHECK(mc.mode_desired == OPEN);
 }
 
 TEST_CASE("obot driver: status is converted back to joint units") {
     actuator::ObotDriverConfig cfg;
-    cfg.address = 2;
     cfg.transmission.gear_ratio = 10;
     cfg.transmission.torque_constant = 0.1f;
     cfg.transmission.direction = -1;
     cfg.transmission.zero_offset = 0.5f;
     ObotDriver d(cfg);
 
-    MotorStatusRegular ms{};
+    MotorStatus ms{};
     ms.motor_position = -15.0f;
     ms.motor_velocity = -20.0f;
     ms.iq = -3.0f;
@@ -103,12 +81,7 @@ TEST_CASE("obot driver: status is converted back to joint units") {
     ms.rr_data.index = BUS_VOLTAGE_INDEX;
     ms.rr_data.type = FLOAT;
     ms.rr_data.data = 47.5f;
-    can::Frame f;
-    f.id = d.rx_id();
-    f.fd = true;
-    f.set_payload(&ms, sizeof(ms), 64);
-    f.rx_time_ns = 1000;
-    REQUIRE(d.on_frame(f));
+    d.on_status(ms, 1000);
     CHECK(d.status().q == doctest::Approx(1.0f));
     CHECK(d.status().qd == doctest::Approx(2.0f));
     CHECK(d.status().tau == doctest::Approx(3.0f));
@@ -116,150 +89,104 @@ TEST_CASE("obot driver: status is converted back to joint units") {
     CHECK(std::isnan(d.status().temperature));
     CHECK_FALSE(d.status().fault);
     CHECK(d.status().rx_count == 1);
+    CHECK(d.status().rx_time_ns == 1000);
 
     ms.flags.error.all = ERROR_MASK_MOTOR_ENCODER | 0x80000000u;
     ms.rr_data.index = MOTOR_TEMPERATURE_INDEX;
     ms.rr_data.data = 55.0f;
-    f.set_payload(&ms, sizeof(ms), 64);
-    REQUIRE(d.on_frame(f));
+    d.on_status(ms, 2000);
     CHECK(d.status().fault);
     CHECK(d.status().error == (ERROR_MASK_MOTOR_ENCODER | 0x80000000u));
     CHECK(d.status().temperature == doctest::Approx(55.0f));
-    CHECK(d.status().bus_voltage == doctest::Approx(47.5f));  // kept from the earlier frame
-
-    f.len = 8;  // too short to be a status
-    CHECK_FALSE(d.on_frame(f));
+    CHECK(d.status().bus_voltage == doctest::Approx(47.5f));  // kept from the earlier status
 }
 
-TEST_CASE("obot driver: the 48 byte status has no velocity, so it is differenced") {
-    ObotDriver d(actuator::ObotDriverConfig{});
-    MotorStatusLite ms{};
-    can::Frame f;
-    f.id = d.rx_id();
-    float q = 0;
-    for (int i = 1; i <= 200; ++i) {
-        q += 0.002f;  // 2 rad/s at 1 kHz
-        ms.motor_position = q;
-        f.set_payload(&ms, sizeof(ms), 48);
-        f.rx_time_ns = static_cast<int64_t>(i) * 1'000'000;
-        REQUIRE(d.on_frame(f));
-    }
-    CHECK(d.status().qd == doctest::Approx(2.0f).epsilon(0.02));
-}
-
-TEST_CASE("cubemars: MIT packing round trips within the resolution of each field") {
-    const actuator::CubeMarsRanges r;
-    uint8_t data[8];
-    CubeMarsDriver::pack_mit(1.234f, -3.21f, 123.0f, 2.5f, -4.5f, r, data);
-    float p, v, kp, kd, t;
-    CubeMarsDriver::unpack_mit(data, r, p, v, kp, kd, t);
-    CHECK(p == doctest::Approx(1.234f).epsilon(0.001));
-    CHECK(std::fabs(v + 3.21f) < 2 * r.v_max / 4095);
-    CHECK(std::fabs(kp - 123.0f) < r.kp_max / 4095);
-    CHECK(std::fabs(kd - 2.5f) < r.kd_max / 4095);
-    CHECK(std::fabs(t + 4.5f) < 2 * r.t_max / 4095);
-
-    // Out of range values saturate rather than wrap.
-    CubeMarsDriver::pack_mit(100.0f, 0, 0, 0, 1000.0f, r, data);
-    CubeMarsDriver::unpack_mit(data, r, p, v, kp, kd, t);
-    CHECK(p == doctest::Approx(r.p_max));
-    CHECK(t == doctest::Approx(r.t_max));
-}
-
-TEST_CASE("cubemars: enter motor mode before the first command, exit when idle") {
-    actuator::CubeMarsDriverConfig cfg;
-    cfg.id = 3;
-    CubeMarsDriver d(cfg);
-    can::Frame f;
-
-    d.make_frame(DriveCommand{}, true, 0, f);
-    CHECK(f.id == 3);
-    CHECK(f.len == 8);
-    CHECK_FALSE(f.fd);
-    CHECK(CubeMarsDriver::is_special(f.data, CubeMarsDriver::kExitMotorMode));
-
-    DriveCommand c;
-    c.mode = JointMode::Position;
-    c.q = 0.5f;
-    c.kp = 50;
-    c.kd = 1;
-    d.make_frame(c, false, 0, f);
-    CHECK(CubeMarsDriver::is_special(f.data, CubeMarsDriver::kEnterMotorMode));
-    d.make_frame(c, false, 0, f);
-    float p, v, kp, kd, t;
-    CubeMarsDriver::unpack_mit(f.data, cfg.ranges, p, v, kp, kd, t);
-    CHECK(p == doctest::Approx(0.5f).epsilon(0.001));
-    CHECK(kp == doctest::Approx(50.0f).epsilon(0.01));
-
-    c.mode = JointMode::Idle;
-    d.make_frame(c, false, 0, f);
-    CHECK(CubeMarsDriver::is_special(f.data, CubeMarsDriver::kExitMotorMode));
-    c.mode = JointMode::Position;
-    d.make_frame(c, false, 0, f);
-    CHECK(CubeMarsDriver::is_special(f.data, CubeMarsDriver::kEnterMotorMode));
-}
-
-TEST_CASE("cubemars: driver against the simulated actuator") {
-    actuator::CubeMarsDriverConfig cfg;
-    cfg.id = 4;
-    cfg.transmission.direction = -1;
-    CubeMarsDriver d(cfg);
-    sim::CubeMarsDeviceParams p;
-    p.id = 4;
-    p.plant.inertia = 0.01f;
-    p.plant.damping = 0.02f;
-    can::FakeBusPair pair("b");
-    sim::DeviceBus devices(pair.device());
-    devices.add(std::make_unique<sim::CubeMarsDeviceSim>(p));
-
-    DriveCommand c;
-    c.mode = JointMode::Position;
-    c.q = 0.8f;
-    c.kp = 40;
-    c.kd = 1.5f;
-    can::Frame f, rx[4];
-    for (int i = 0; i < 3000; ++i) {
-        d.make_frame(c, false, 0, f);
-        pair.host().send(f);
-        devices.pump();
-        devices.step(0.001f);
-        const int n = pair.host().recv(rx, 4);
-        REQUIRE(n == 1);
-        REQUIRE(rx[0].id == d.rx_id());
-        REQUIRE(d.on_frame(rx[0]));
-    }
-    CHECK(d.status().q == doctest::Approx(0.8f).epsilon(0.01));
-    CHECK(std::fabs(d.status().qd) < 0.05f);
-    // direction = -1: the actuator itself went the other way.
-    auto& device = static_cast<sim::CubeMarsDeviceSim&>(devices.device(0));
-    CHECK(device.plant().q == doctest::Approx(-0.8f).epsilon(0.01));
-    CHECK(device.motor_mode());
-    CHECK(d.status().temperature == doctest::Approx(30.0f));
-
-    // A reply carrying another actuator's id is not ours.
-    rx[0].data[0] = 9;
-    CHECK_FALSE(d.on_frame(rx[0]));
-}
-
-TEST_CASE("obot simulated actuator: host timeout faults it, clear faults recovers") {
+TEST_CASE("motors: commands go out and statuses come back through motor-realtime") {
     sim::ObotDeviceParams p;
-    p.address = 1;
+    auto a = std::make_shared<sim::SimMotor>("a", p);
+    auto b = std::make_shared<sim::SimMotor>("b", p);
+    actuator::Motors motors({a, b});
+    REQUIRE(motors.size() == 2);
+    CHECK(motors.motor(1).name() == "b");
+
+    motors.read();  // nothing was asked yet
+    CHECK_FALSE(motors.fresh(0));
+    CHECK_FALSE(motors.fresh(1));
+
+    motors.command(0).mode_desired = CURRENT;
+    motors.command(0).current_desired = 2.0f;
+    motors.command(0).host_timestamp = 1;
+    motors.command(1).mode_desired = DAMPED;
+    motors.command(1).host_timestamp = 1;
+    motors.write();
+    CHECK_FALSE(motors.tx_failed(0));
+    a->step(0.001f);
+    b->step(0.001f);
+    motors.wait(100'000);  // simulated motors have answered already: does not wait
+    motors.read();
+    CHECK(motors.fresh(0));
+    CHECK(motors.fresh(1));
+    CHECK(motors.status(0).host_timestamp_received == 1);
+    CHECK(a->device().mode() == CURRENT);
+    CHECK(b->device().mode() == DAMPED);
+
+    // Reading again without a new answer: the old status is still there, but not fresh.
+    motors.read();
+    CHECK_FALSE(motors.fresh(0));
+    CHECK(motors.status(0).host_timestamp_received == 1);
+
+    // A motor that cannot be written to does not keep the other from being commanded.
+    a->fail_writes(1);
+    motors.command(0).host_timestamp = 2;
+    motors.command(1).host_timestamp = 2;
+    motors.write();
+    CHECK(motors.tx_failed(0));
+    CHECK_FALSE(motors.tx_failed(1));
+    motors.read();
+    CHECK_FALSE(motors.fresh(0));
+    CHECK(motors.fresh(1));
+    CHECK(b->device().last_host_timestamp() == 2);
+    CHECK(a->device().last_host_timestamp() == 1);
+
+    // A drive without power: the command is "sent", nothing comes back.
+    b->set_powered(false);
+    motors.command(1).host_timestamp = 3;
+    motors.write();
+    CHECK_FALSE(motors.tx_failed(1));
+    motors.read();
+    CHECK_FALSE(motors.fresh(1));
+}
+
+namespace {
+// As a board with firmware built for another major version of the messages reports itself.
+class OldFirmware : public sim::SimMotor {
+ public:
+    OldFirmware() : SimMotor("old", sim::ObotDeviceParams{}) { messages_version_ = "3.1"; }
+};
+}  // namespace
+
+TEST_CASE("motors: firmware that speaks another messages version is refused") {
+    CHECK_THROWS_WITH_AS(actuator::Motors({std::make_shared<OldFirmware>()}), doctest::Contains("version"),
+                         std::runtime_error);
+}
+
+TEST_CASE("simulated actuator: host timeout faults it, clear faults recovers") {
+    sim::ObotDeviceParams p;
     p.host_timeout_s = 0.02f;
-    can::FakeBusPair pair("b");
-    sim::DeviceBus devices(pair.device());
-    devices.add(std::make_unique<sim::ObotDeviceSim>(p));
-    auto& device = static_cast<sim::ObotDeviceSim&>(devices.device(0));
+    auto motor = std::make_shared<sim::SimMotor>("m", p);
+    sim::ObotDeviceSim& device = motor->device();
+    actuator::Motors motors({motor});
     ObotDriver d(actuator::ObotDriverConfig{});
 
+    uint32_t count = 0;
     const auto cycle = [&](const DriveCommand& c, bool send) {
-        can::Frame f, rx[4];
         if (send) {
-            d.make_frame(c, false, 0, f);
-            pair.host().send(f);
+            d.fill(c, ++count, motors.command(0));
+            motors.write();
         }
-        devices.pump();
-        devices.step(0.001f);
-        if (pair.host().recv(rx, 4) == 1) d.on_frame(rx[0]);
+        motor->step(0.001f);
+        motors.read();
+        if (motors.fresh(0)) d.on_status(motors.status(0), 0);
     };
 
     DriveCommand c;

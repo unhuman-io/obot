@@ -5,7 +5,6 @@
 #include <cstring>
 #include <stdexcept>
 
-#include "obot/actuator/cubemars_driver.h"
 #include "obot/actuator/obot_driver.h"
 
 namespace obot::robot {
@@ -26,41 +25,28 @@ bool is_position_mode(JointMode m) {
 // The joint's velocity as a starting point for a setpoint: within what the filter may command.
 template <typename J>
 float measured_velocity(const J& j) {
-    return std::clamp(j.driver->status().qd, -j.cfg.qd_max, j.cfg.qd_max);
+    return std::clamp(j.driver.status().qd, -j.cfg.qd_max, j.cfg.qd_max);
 }
 }  // namespace
 
-Runtime::Runtime(const RobotConfig& config, std::vector<can::Bus*> buses) : config_(config), buses_(std::move(buses)) {
-    if (buses_.size() != config_.buses.size()) {
-        throw std::invalid_argument("Runtime: one bus per configured bus is required");
+Runtime::Runtime(const RobotConfig& config, actuator::Motors& motors) : config_(config), motors_(motors) {
+    if (motors_.size() != config_.joints.size()) {
+        throw std::invalid_argument("Runtime: one motor per configured joint is required");
     }
     joints_.reserve(config_.joints.size());
     for (const JointConfig& jc : config_.joints) {
         Joint j;
         j.cfg = jc;
-        j.bus = buses_[static_cast<size_t>(jc.bus_index)];
-        if (jc.driver == DriverKind::Obot) {
-            actuator::ObotDriverConfig dc;
-            dc.address = static_cast<uint8_t>(jc.id);
-            dc.transmission = jc.transmission;
-            dc.idle_damped = jc.idle_damped;
-            dc.output_encoder = jc.output_encoder;
-            dc.torque_sensor = jc.torque_sensor;
-            dc.damped_kd = jc.damped_kd;
-            j.driver = std::make_unique<actuator::ObotDriver>(dc);
-        } else {
-            actuator::CubeMarsDriverConfig dc;
-            dc.id = static_cast<uint8_t>(jc.id);
-            dc.reply_id = jc.reply_id;
-            dc.transmission = jc.transmission;
-            dc.ranges = jc.cubemars;
-            if (jc.damped_kd > 0) dc.damped_kd = jc.damped_kd;
-            j.driver = std::make_unique<actuator::CubeMarsDriver>(dc);
-        }
+        actuator::ObotDriverConfig dc;
+        dc.transmission = jc.transmission;
+        dc.idle_damped = jc.idle_damped;
+        dc.output_encoder = jc.output_encoder;
+        dc.torque_sensor = jc.torque_sensor;
+        dc.damped_kd = jc.damped_kd;
+        j.driver = actuator::ObotDriver(dc);
         j.position_filter.configure(jc.qd_max, jc.qdd_max);
         joints_.push_back(std::move(j));
     }
-    bus_rx_errors_.assign(buses_.size(), 0);
 }
 
 ipc::RobotInfo Runtime::info() const {
@@ -100,7 +86,7 @@ bool Runtime::accept_command(const ipc::RobotCommand& c) const {
 
 void Runtime::enter_active() {
     for (Joint& j : joints_) {
-        const actuator::DriveStatus& st = j.driver->status();
+        const actuator::DriveStatus& st = j.driver.status();
         j.position_filter.reset(st.q, measured_velocity(j));
         j.velocity_limiter.reset(0);
         j.holding = false;
@@ -135,7 +121,7 @@ void Runtime::handle_request(Request request) {
 
 void Runtime::command_joint(Joint& j, size_t index, bool fresh, float dt) {
     const JointConfig& c = j.cfg;
-    const actuator::DriveStatus& st = j.driver->status();
+    const actuator::DriveStatus& st = j.driver.status();
     const JointMode previous = j.sent.mode;
     actuator::DriveCommand dc;
 
@@ -296,49 +282,36 @@ void Runtime::begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* co
     const bool clearing = clear_burst_ > 0;
     for (size_t i = 0; i < joints_.size(); ++i) {
         Joint& j = joints_[i];
-        bool poll_only = false;
         if (mode_ == RobotMode::Active) {
             command_joint(j, i, fresh, dt);
         } else {
-            j.sent = actuator::DriveCommand{};
-            poll_only = mode_ == RobotMode::Init && !clearing;
+            j.sent = actuator::DriveCommand{};  // idle; also what asks a drive for its first status
         }
         j.sent.clear_faults = clearing;
-        can::Frame frame;
-        j.driver->make_frame(j.sent, poll_only, static_cast<uint32_t>(cycle_), frame);
-        if (!j.bus->send(frame)) {
-            warning_ |= ipc::robot_warning::kTxDropped;
-            j.driver->send_failed();
-        }
+        j.driver.fill(j.sent, static_cast<uint32_t>(cycle_), motors_.command(i));
         j.replied = false;
+    }
+    motors_.write();
+    for (size_t i = 0; i < joints_.size(); ++i) {
+        if (motors_.tx_failed(i)) warning_ |= ipc::robot_warning::kTxDropped;
     }
     if (clearing) --clear_burst_;
     last_rx_ns_ = 0;
 }
 
 int Runtime::poll_rx(int64_t now_mono_ns) {
-    can::Frame frames[32];
-    for (size_t b = 0; b < buses_.size(); ++b) {
-        for (;;) {
-            const int n = buses_[b]->recv(frames, 32);
-            if (n == 0) break;
-            for (int k = 0; k < n; ++k) {
-                can::Frame& f = frames[k];
-                if (f.rx_time_ns == 0) f.rx_time_ns = now_mono_ns;
-                for (Joint& j : joints_) {
-                    if (j.bus != buses_[b] || j.driver->rx_id() != f.id) continue;
-                    if (j.driver->on_frame(f)) {
-                        j.replied = true;
-                        j.ever_replied = true;
-                        last_rx_ns_ = std::max(last_rx_ns_, f.rx_time_ns);
-                    }
-                    break;
-                }
-            }
-        }
-    }
+    motors_.read();
     int missing = 0;
-    for (const Joint& j : joints_) missing += j.replied ? 0 : 1;
+    for (size_t i = 0; i < joints_.size(); ++i) {
+        Joint& j = joints_[i];
+        if (motors_.fresh(i)) {
+            j.driver.on_status(motors_.status(i), now_mono_ns);
+            j.replied = true;
+            j.ever_replied = true;
+            last_rx_ns_ = std::max(last_rx_ns_, now_mono_ns);
+        }
+        missing += j.replied ? 0 : 1;
+    }
     return missing;
 }
 
@@ -348,7 +321,7 @@ void Runtime::update_odometry() {
     Joint& right = joints_[static_cast<size_t>(base.right_index)];
     const float dt = static_cast<float>(config_.period_us) * 1e-6f;
     const auto wheel_delta = [dt](Joint& j) {
-        const actuator::DriveStatus& st = j.driver->status();
+        const actuator::DriveStatus& st = j.driver.status();
         float d = st.qd * dt;
         if (j.have_last_q) {
             const float measured = st.q - j.last_q;
@@ -367,8 +340,8 @@ void Runtime::update_odometry() {
     odom_x_ += d * std::cos(odom_yaw_ + 0.5 * dyaw);
     odom_y_ += d * std::sin(odom_yaw_ + 0.5 * dyaw);
     odom_yaw_ += dyaw;
-    const float vl = left.driver->status().qd * base.wheel_radius;
-    const float vr = right.driver->status().qd * base.wheel_radius;
+    const float vl = left.driver.status().qd * base.wheel_radius;
+    const float vr = right.driver.status().qd * base.wheel_radius;
     base_v_ = 0.5f * (vl + vr);
     base_omega_ = (vr - vl) / base.track_width;
 }
@@ -377,7 +350,7 @@ void Runtime::end_cycle(int64_t now_mono_ns, ipc::RobotState& out) {
     bool all_replied = true;
     bool any_drive_fault = false;
     for (Joint& j : joints_) {
-        const actuator::DriveStatus& st = j.driver->status();
+        const actuator::DriveStatus& st = j.driver.status();
         if (j.replied) {
             j.consecutive_miss = 0;
         } else {
@@ -399,14 +372,6 @@ void Runtime::end_cycle(int64_t now_mono_ns, ipc::RobotState& out) {
             if (std::fabs(st.qd) > kVelocityTripFactor * j.cfg.qd_max) j.fault |= ipc::joint_fault::kVelocityLimit;
         }
         if (j.fault) fault_ |= ipc::robot_fault::kJoint;
-    }
-
-    for (size_t b = 0; b < buses_.size(); ++b) {
-        const uint64_t errors = buses_[b]->counters().rx_error;
-        if (errors != bus_rx_errors_[b]) {
-            bus_rx_errors_[b] = errors;
-            if (mode_ != RobotMode::Init) fault_ |= ipc::robot_fault::kBus;
-        }
     }
 
     if (mode_ == RobotMode::Init) {
@@ -447,7 +412,7 @@ void Runtime::end_cycle(int64_t now_mono_ns, ipc::RobotState& out) {
     out.base_omega = base_omega_;
     for (size_t i = 0; i < joints_.size(); ++i) {
         const Joint& j = joints_[i];
-        const actuator::DriveStatus& st = j.driver->status();
+        const actuator::DriveStatus& st = j.driver.status();
         out.joint_mode[i] = static_cast<uint8_t>(j.sent.mode);
         out.joint_fault[i] = j.fault;
         out.drive_error[i] = st.error;

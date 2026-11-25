@@ -1,5 +1,5 @@
-// The control cycle against simulated actuators on in-process buses, with a simulated
-// clock: every test is deterministic and runs faster than real time.
+// The control cycle against simulated motors (reached through motor-realtime, like real
+// ones), with a simulated clock: every test is deterministic and runs faster than real time.
 #include "doctest.h"
 
 #include <cmath>
@@ -8,12 +8,11 @@
 #include <string>
 #include <vector>
 
-#include "obot/wire/obot_messages.h"
-#include "obot/can/fake_bus.h"
+#include "obot/actuator/motors.h"
 #include "obot/ipc/shm_region.h"
 #include "obot/robot/config.h"
+#include "obot/robot/motor_factory.h"
 #include "obot/robot/runtime.h"
-#include "obot/robot/sim_factory.h"
 #include "obot/sim/devices.h"
 
 using namespace obot;
@@ -23,7 +22,7 @@ using ipc::RobotMode;
 
 namespace {
 
-// Two arm joints (one per protocol) and a two wheel base.
+// Two arm joints and a two wheel base.
 const char* kRobot = R"(
 [robot]
 name = "rig"
@@ -35,11 +34,6 @@ max_bus_load = 2.0
 [[bus]]
 name = "fd"
 interface = "sim"
-
-[[bus]]
-name = "classic"
-interface = "sim"
-fd = false
 
 [[joint]]
 name = "shoulder"
@@ -58,9 +52,8 @@ sim = { inertia = 0.2, damping = 0.2 }
 
 [[joint]]
 name = "wrist"
-bus = "classic"
-driver = "cubemars_mit"
-id = 3
+bus = "fd"
+id = 4
 direction = -1
 q_min = -1.5
 q_max = 1.5
@@ -107,8 +100,8 @@ enum { kShoulder = 0, kWrist = 1, kLeft = 2, kRight = 3 };
 
 struct Rig {
     robot::RobotConfig config;
-    std::vector<std::unique_ptr<can::FakeBusPair>> pairs;
-    std::vector<std::unique_ptr<sim::DeviceBus>> devices;
+    std::vector<sim::SimMotor*> sims;  // one per joint
+    std::unique_ptr<actuator::Motors> motors;
     std::unique_ptr<robot::Runtime> runtime;
     ipc::RobotCommand command{};
     bool have_command = false;
@@ -117,26 +110,16 @@ struct Rig {
     bool devices_powered = true;
 
     explicit Rig(const char* toml = kRobot) : config(robot::parse_config(toml)) {
-        std::vector<can::Bus*> buses;
-        for (size_t b = 0; b < config.buses.size(); ++b) {
-            pairs.push_back(std::make_unique<can::FakeBusPair>(config.buses[b].name));
-            devices.push_back(std::make_unique<sim::DeviceBus>(pairs.back()->device()));
-            for (const auto& j : config.joints) {
-                if (j.bus_index == static_cast<int>(b)) devices.back()->add(robot::make_sim_device(j, config));
-            }
-            buses.push_back(&pairs.back()->host());
-            devices.back()->step(0.001f);  // the drives have been running for a while
-        }
-        runtime = std::make_unique<robot::Runtime>(config, buses);
+        robot::OpenedMotors opened = robot::open_motors(config);
+        sims = opened.simulated;
+        REQUIRE(sims.size() == config.joints.size());
+        for (sim::SimMotor* m : sims) m->step(0.001f);  // the drives have been running for a while
+        motors = std::make_unique<actuator::Motors>(std::move(opened.motors));
+        runtime = std::make_unique<robot::Runtime>(config, *motors);
     }
 
-    // Devices in configuration order on their bus.
-    sim::ObotDeviceSim& obot_device(size_t bus, size_t i) {
-        return static_cast<sim::ObotDeviceSim&>(devices[bus]->device(i));
-    }
-    sim::CubeMarsDeviceSim& cubemars_device(size_t bus, size_t i) {
-        return static_cast<sim::CubeMarsDeviceSim&>(devices[bus]->device(i));
-    }
+    // The simulated drive of a joint.
+    sim::ObotDeviceSim& device(size_t joint) { return sims[joint]->device(); }
 
     // What a client's write_command() does.
     void send(Request request = Request::None) {
@@ -154,12 +137,10 @@ struct Rig {
         robot::CycleTiming timing;
         timing.now_mono_ns = now;
         timing.now_real_ns = now;
+        for (sim::SimMotor* m : sims) m->set_powered(devices_powered);
         runtime->begin_cycle(timing, have_command ? &command : nullptr);
         const float dt = static_cast<float>(config.period_us) * 1e-6f;
-        for (auto& d : devices) {
-            if (devices_powered) d->pump();
-            d->step(dt);
-        }
+        for (sim::SimMotor* m : sims) m->step(dt);
         runtime->poll_rx(now + 200'000);
         runtime->end_cycle(now + 300'000, state);
     }
@@ -197,7 +178,7 @@ constexpr uint32_t kEstop = static_cast<uint32_t>(RobotMode::Estop);
 
 }  // namespace
 
-TEST_CASE("start-up: init until every actuator reports, then idle without commanding anything") {
+TEST_CASE("start-up: init until every actuator reports, then idle") {
     Rig r;
     r.devices_powered = false;
     r.run(50, 0);
@@ -212,14 +193,13 @@ TEST_CASE("start-up: init until every actuator reports, then idle without comman
     CHECK(r.state.rx_age_us[kShoulder] >= 0);
     CHECK(r.state.rx_age_us[kShoulder] < 1000);
     CHECK(r.state.command_age_us == -1);
-    // Polling in init must not have taken the drive out of whatever mode it was in...
+    // Idle commands the drives' DAMPED mode.
     r.run(100, 0);
-    // ...and idle commands DAMPED on the obot drive and leaves the cubemars drive unpowered.
-    CHECK(r.obot_device(0, 0).mode() == DAMPED);
-    CHECK_FALSE(r.cubemars_device(1, 0).motor_mode());
+    CHECK(r.device(kShoulder).mode() == DAMPED);
+    CHECK(r.device(kWrist).mode() == DAMPED);
     CHECK(r.state.temperature[kShoulder] == doctest::Approx(30.0f));
     CHECK(r.state.bus_voltage[kShoulder] == doctest::Approx(48.0f));
-    CHECK(std::isnan(r.state.bus_voltage[kWrist]));  // the cubemars protocol does not report it
+    CHECK(r.state.bus_voltage[kWrist] == doctest::Approx(48.0f));
 }
 
 TEST_CASE("enable is refused before idle and when not requested") {
@@ -261,8 +241,8 @@ TEST_CASE("position commands are tracked through the velocity and acceleration l
     CHECK(r.state.q[kWrist] == doctest::Approx(-0.7f).epsilon(0.01));
     CHECK(r.state.kp_cmd[kShoulder] == 200.0f);
     // The joint really moved in the drive's own frame, with the sign flipped for the wrist.
-    CHECK(r.obot_device(0, 0).plant().q == doctest::Approx(1.0f).epsilon(0.01));
-    CHECK(r.cubemars_device(1, 0).plant().q == doctest::Approx(0.7f).epsilon(0.01));
+    CHECK(r.device(kShoulder).plant().q == doctest::Approx(1.0f).epsilon(0.01));
+    CHECK(r.device(kWrist).plant().q == doctest::Approx(0.7f).epsilon(0.01));
     CHECK(r.state.command_age_us >= 0);
     CHECK(r.state.command_age_us < 11000);
 }
@@ -320,9 +300,9 @@ TEST_CASE("an actuator that stops answering faults the robot and everything goes
     r.set_all(JointMode::Position);
     r.command.q[kShoulder] = 0.5f;
     r.run(1000);
-    CHECK(r.obot_device(0, 0).mode() == STATE);
+    CHECK(r.device(kShoulder).mode() == STATE);
 
-    r.obot_device(0, 0).set_silent(true);
+    r.device(kShoulder).set_silent(true);
     r.run(5);
     CHECK(mode_of(r) == kActive);  // a few lost frames are tolerated
     r.run(3);
@@ -333,11 +313,11 @@ TEST_CASE("an actuator that stops answering faults the robot and everything goes
     CHECK(r.state.rx_miss[kShoulder] >= 6);
     r.run(5);
     CHECK(r.state.joint_mode[kWrist] == static_cast<uint8_t>(JointMode::Idle));
-    CHECK_FALSE(r.cubemars_device(1, 0).motor_mode());
-    CHECK(r.obot_device(0, 1).mode() == DAMPED);
+    CHECK(r.device(kWrist).mode() == DAMPED);
+    CHECK(r.device(kLeft).mode() == DAMPED);
 
     // Enable is refused while faulted; the fault stays latched after the actuator returns.
-    r.obot_device(0, 0).set_silent(false);
+    r.device(kShoulder).set_silent(false);
     r.send(Request::Enable);
     r.run(20);
     CHECK(mode_of(r) == kFault);
@@ -355,7 +335,7 @@ TEST_CASE("an actuator that stops answering faults the robot and everything goes
 TEST_CASE("clearing faults while the cause persists faults again") {
     Rig r;
     r.enable();
-    r.obot_device(0, 0).set_silent(true);
+    r.device(kShoulder).set_silent(true);
     r.run(10);
     CHECK(mode_of(r) == kFault);
     r.send(Request::ClearFaults);
@@ -366,7 +346,7 @@ TEST_CASE("clearing faults while the cause persists faults again") {
 TEST_CASE("a drive fault is reported with the drive's error word and cleared on request") {
     Rig r;
     r.enable();
-    r.obot_device(0, 0).inject_error(ERROR_MASK_MOTOR_TEMPERATURE);
+    r.device(kShoulder).inject_error(ERROR_MASK_MOTOR_TEMPERATURE);
     r.run(3);
     CHECK(mode_of(r) == kFault);
     CHECK((r.state.joint_fault[kShoulder] & ipc::joint_fault::kDrive) != 0);
@@ -376,18 +356,18 @@ TEST_CASE("a drive fault is reported with the drive's error word and cleared on 
     r.run(20);
     CHECK(mode_of(r) == kIdle);
     CHECK(r.state.drive_error[kShoulder] == 0);
-    CHECK_FALSE(r.obot_device(0, 0).safe_mode());
+    CHECK_FALSE(r.device(kShoulder).safe_mode());
 }
 
 TEST_CASE("drives left faulted by an earlier host are cleared once at start-up") {
     Rig r;
-    r.obot_device(0, 0).inject_error(ERROR_MASK_SEQUENCE);  // what a host timeout leaves behind
-    r.devices[0]->step(0.001f);
-    REQUIRE(r.obot_device(0, 0).safe_mode());
+    r.device(kShoulder).inject_error(ERROR_MASK_SEQUENCE);  // what a host timeout leaves behind
+    r.sims[kShoulder]->step(0.001f);
+    REQUIRE(r.device(kShoulder).safe_mode());
     r.run(30, 0);
     CHECK(mode_of(r) == kIdle);
     CHECK(r.state.fault == 0);
-    CHECK_FALSE(r.obot_device(0, 0).safe_mode());
+    CHECK_FALSE(r.device(kShoulder).safe_mode());
 }
 
 TEST_CASE("estop wins from any mode and needs an explicit clear") {
@@ -441,8 +421,8 @@ TEST_CASE("base twist: wheel speeds, direction signs and odometry") {
     // Both wheels turn forward in joint terms; the right motor itself turns the other way.
     CHECK(r.state.qd[kLeft] == doctest::Approx(4.0f).epsilon(0.02));
     CHECK(r.state.qd[kRight] == doctest::Approx(4.0f).epsilon(0.02));
-    CHECK(r.obot_device(0, 1).plant().qd > 0);
-    CHECK(r.obot_device(0, 2).plant().qd < 0);
+    CHECK(r.device(kLeft).plant().qd > 0);
+    CHECK(r.device(kRight).plant().qd < 0);
     CHECK(r.state.base_v == doctest::Approx(0.4f).epsilon(0.02));
     CHECK(std::fabs(r.state.base_omega) < 0.01f);
     // 3 s at 0.4 m/s less the ramp-up (0.4 m/s at 2 m/s^2 loses 0.04 m).
@@ -530,11 +510,11 @@ TEST_CASE("disable and shutdown return the drives to idle") {
     r.enable();
     r.set_all(JointMode::Position);
     r.run(200);
-    CHECK(r.cubemars_device(1, 0).motor_mode());
+    CHECK(r.device(kWrist).mode() == STATE);
     r.send(Request::Disable);
     r.run(5);
     CHECK(mode_of(r) == kIdle);
-    CHECK_FALSE(r.cubemars_device(1, 0).motor_mode());
+    CHECK(r.device(kWrist).mode() == DAMPED);
 
     r.send(Request::Enable);
     r.run(50);
@@ -554,10 +534,7 @@ TEST_CASE("overruns are counted and flagged") {
     t.now_mono_ns = r.now + 5'000'000;
     t.overrun = true;
     r.runtime->begin_cycle(t, nullptr);
-    for (auto& d : r.devices) {
-        d->pump();
-        d->step(0.001f);
-    }
+    for (sim::SimMotor* m : r.sims) m->step(0.001f);
     r.runtime->poll_rx(t.now_mono_ns);
     r.runtime->end_cycle(t.now_mono_ns, r.state);
     CHECK(r.state.overruns == 1);
@@ -645,23 +622,28 @@ TEST_CASE("switching a moving joint from velocity to position keeps the setpoint
     CHECK(mode_of(r) == kActive);
 }
 
-TEST_CASE("a cubemars drive whose enter-motor-mode frame is lost is asked again") {
+TEST_CASE("a command that cannot be sent is flagged, and the other drives still get theirs") {
     Rig r;
-    r.run(20, 0);
-    // The bus's transmit queue is full when the first frame of the enabled joint goes out.
-    can::Frame filler;
-    filler.id = 0x7ff;
-    while (r.pairs[1]->host().send(filler)) {
-    }
-    r.devices_powered = false;  // nothing drains the queue during this cycle
+    r.enable();
     r.set_all(JointMode::Position);
-    r.send(Request::Enable);
+    r.run(50);
+    CHECK(r.state.warning == 0);
+    const uint32_t shoulder_before = r.device(kShoulder).last_host_timestamp();
+    r.sims[kShoulder]->fail_writes(1);
     r.cycle();
-    CHECK(mode_of(r) == kActive);
     CHECK((r.state.warning & ipc::robot_warning::kTxDropped) != 0);
-    CHECK_FALSE(r.cubemars_device(1, 0).motor_mode());
-    r.devices_powered = true;
+    CHECK(r.device(kShoulder).last_host_timestamp() == shoulder_before);  // it never arrived
+    CHECK(r.device(kWrist).last_host_timestamp() == shoulder_before + 1);
+    CHECK(r.state.rx_miss[kShoulder] == 1);
+    CHECK(r.state.rx_miss[kWrist] == 0);
     r.run(10);
-    CHECK(r.cubemars_device(1, 0).motor_mode());
-    CHECK(mode_of(r) == kActive);
+    CHECK(mode_of(r) == kActive);  // one lost cycle is tolerated
+    CHECK((r.state.warning & ipc::robot_warning::kTxDropped) == 0);
+
+    // A drive that cannot be written to at all ends as a comm fault, like one that is silent.
+    r.sims[kShoulder]->fail_writes(1000);
+    r.run(10);
+    CHECK(mode_of(r) == kFault);
+    CHECK((r.state.joint_fault[kShoulder] & ipc::joint_fault::kCommTimeout) != 0);
+    CHECK(r.device(kWrist).mode() == DAMPED);
 }

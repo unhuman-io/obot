@@ -158,7 +158,6 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
                     "output_encoder",
                     "torque_sensor",
                     "damped_kd",
-                    "reply_id",
                     "continuous",
                     "q_min",
                     "q_max",
@@ -171,19 +170,14 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
                     "kp_max",
                     "kd_max",
                     "temperature_max",
-                    "cubemars",
                     "sim",
                     "usb_name"});
         get(ctx, *t, where, "bus", j.bus);
         std::string driver = "obot";
         get(ctx, *t, where, "driver", driver);
-        if (driver == "obot") {
-            j.driver = DriverKind::Obot;
-        } else if (driver == "cubemars_mit") {
-            j.driver = DriverKind::CubeMarsMit;
-        } else {
-            ctx.fail(where, "unknown driver '" + driver + "' (obot, cubemars_mit)");
-        }
+        // Every actuator runs the obot-controller firmware; the key is accepted so that
+        // existing files keep loading.
+        if (driver != "obot") ctx.fail(where, "unknown driver '" + driver + "' (only \"obot\" exists)");
         get(ctx, *t, where, "id", j.id);
         j.usb_name = j.name;
         get(ctx, *t, where, "usb_name", j.usb_name);
@@ -198,7 +192,6 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
         get(ctx, *t, where, "output_encoder", j.output_encoder);
         get(ctx, *t, where, "torque_sensor", j.torque_sensor);
         get(ctx, *t, where, "damped_kd", j.damped_kd);
-        get(ctx, *t, where, "reply_id", j.reply_id);
         get(ctx, *t, where, "continuous", j.continuous);
         get(ctx, *t, where, "q_min", j.q_min);
         get(ctx, *t, where, "q_max", j.q_max);
@@ -211,14 +204,6 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
         get(ctx, *t, where, "kp_max", j.kp_max);
         get(ctx, *t, where, "kd_max", j.kd_max);
         get(ctx, *t, where, "temperature_max", j.temperature_max);
-        if (const auto* cm = subtable(ctx, *t, where, "cubemars")) {
-            check_keys(ctx, *cm, where + " cubemars", {"p_max", "v_max", "t_max", "kp_max", "kd_max"});
-            get(ctx, *cm, where, "p_max", j.cubemars.p_max);
-            get(ctx, *cm, where, "v_max", j.cubemars.v_max);
-            get(ctx, *cm, where, "t_max", j.cubemars.t_max);
-            get(ctx, *cm, where, "kp_max", j.cubemars.kp_max);
-            get(ctx, *cm, where, "kd_max", j.cubemars.kd_max);
-        }
         if (const auto* s = subtable(ctx, *t, where, "sim")) {
             check_keys(ctx, *s, where + " sim", {"inertia", "damping", "gravity", "current_limit"});
             get(ctx, *s, where, "inertia", j.sim_plant.inertia);
@@ -234,17 +219,8 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
         }
         if (j.bus_index < 0) ctx.fail(where, "bus '" + j.bus + "' is not defined");
         const BusConfig& bus = c.buses[static_cast<size_t>(j.bus_index)];
-        if (j.driver == DriverKind::Obot) {
-            if (j.id < 1 || j.id > static_cast<int>(actuator::obot_can::kMaxAddress)) {
-                ctx.fail(where, "id must be 1..126 for the obot driver");
-            }
-            if (!bus.fd && !bus.usb) {
-                ctx.fail(where, "the obot driver needs a CAN FD bus (fd = true)");
-            }
-        } else {
-            if (bus.usb) ctx.fail(where, "a usbrt bus only carries obot drivers");
-            if (j.id < 1 || j.id > 127) ctx.fail(where, "id must be 1..127 for the cubemars driver");
-        }
+        if (j.id < 1 || j.id > 126) ctx.fail(where, "id must be 1..126");  // 127 is the enumeration broadcast
+        if (!bus.fd && !bus.usb) ctx.fail(where, "the actuators need a CAN FD bus (fd = true)");
         if (j.output_encoder && !j.continuous) {
             // Position commands go to the drive in the motor encoder's frame, which is not
             // related to the output encoder's until the two are aligned.
@@ -261,26 +237,11 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
         if (j.kp < 0 || j.kd < 0 || j.kp_max < 0 || j.kd_max < 0) ctx.fail(where, "gains must not be negative");
         if (j.kp_max == 0) {
             j.kp_max = 4 * j.kp;
-            if (j.driver == DriverKind::CubeMarsMit) j.kp_max = std::min(j.kp_max, j.cubemars.kp_max);
         }
         if (j.kd_max == 0) {
             j.kd_max = 4 * j.kd;
-            if (j.driver == DriverKind::CubeMarsMit) j.kd_max = std::min(j.kd_max, j.cubemars.kd_max);
         }
         if (j.kp > j.kp_max || j.kd > j.kd_max) ctx.fail(where, "kp / kd exceed kp_max / kd_max");
-        if (j.driver == DriverKind::CubeMarsMit) {
-            const auto& r = j.cubemars;
-            if (j.kp_max > r.kp_max || j.kd_max > r.kd_max) {
-                ctx.fail(where, "kp_max / kd_max exceed what the cubemars frame can express");
-            }
-            if (j.tau_max > r.t_max) ctx.fail(where, "tau_max exceeds cubemars.t_max");
-            if (j.qd_max > r.v_max) ctx.fail(where, "qd_max exceeds cubemars.v_max");
-            if (j.continuous) ctx.fail(where, "continuous joints are not supported by the cubemars driver");
-            const float reach = std::max(std::fabs(j.q_min + j.transmission.zero_offset),
-                                         std::fabs(j.q_max + j.transmission.zero_offset)) +
-                                j.limit_margin;
-            if (reach > r.p_max) ctx.fail(where, "position limits exceed cubemars.p_max");
-        }
         j.sim_plant.q_min = j.continuous ? -INFINITY : j.q_min - 2 * j.limit_margin;
         j.sim_plant.q_max = j.continuous ? INFINITY : j.q_max + 2 * j.limit_margin;
 
@@ -370,30 +331,15 @@ void override_interfaces(RobotConfig& config, bool all_sim, const std::vector<st
     }
 }
 
-std::vector<uint32_t> rx_ids(const RobotConfig& config, int bus_index) {
-    std::vector<uint32_t> ids;
-    for (const auto& j : config.joints) {
-        if (j.bus_index != bus_index) continue;
-        if (j.driver == DriverKind::Obot) {
-            ids.push_back(actuator::obot_can::can_id(actuator::obot_can::kStatus, static_cast<uint32_t>(j.id)));
-        } else {
-            ids.push_back(j.reply_id ? j.reply_id : static_cast<uint32_t>(j.id));
-        }
-    }
-    return ids;
-}
-
 std::vector<BusLoad> bus_loads(const RobotConfig& config) {
     std::vector<BusLoad> loads;
     for (const auto& b : config.buses) loads.push_back(BusLoad{b.name, 0, 0, 0});
     for (const auto& j : config.joints) {
         const BusConfig& b = config.buses[static_cast<size_t>(j.bus_index)];
         const can::BitTiming timing{b.bitrate, b.data_bitrate};
-        const bool fd = j.driver == DriverKind::Obot;
-        const unsigned tx = fd ? 48 : 8;
-        const unsigned rx = fd ? 64 : 8;
+        // Per cycle and joint: a 48 byte command and a 64 byte status, CAN FD with bit rate switch.
         BusLoad& l = loads[static_cast<size_t>(j.bus_index)];
-        l.busy_s += can::frame_time_s(tx, fd, fd, timing) + can::frame_time_s(rx, fd, fd, timing);
+        l.busy_s += can::frame_time_s(48, true, true, timing) + can::frame_time_s(64, true, true, timing);
         l.frames += 2;
     }
     for (size_t i = 0; i < loads.size(); ++i) {

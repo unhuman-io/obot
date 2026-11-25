@@ -24,7 +24,7 @@ sudo apt install gawk wget git diffstat unzip texinfo gcc build-essential chrpat
     python3 python3-pip python3-pexpect xz-utils debianutils iputils-ping python3-git \
     python3-jinja2 python3-subunit zstd lz4 file locales libacl1
 pipx install kas
-git submodule update --init
+git submodule update --init --recursive
 
 export KAS_WORK_DIR=~/obot-os        # layers, downloads and build output go here
 kas build os/kas/obot.yml:os/kas/orin-nano.yml

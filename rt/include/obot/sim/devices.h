@@ -1,15 +1,18 @@
-// Simulated actuators that speak the real CAN protocols, so the whole stack above the
-// bus can run without hardware: in-process on a FakeBus (unit tests, `interface = "sim"`)
-// or on a SocketCAN interface such as vcan0 (obot-sim-node).
+// Simulated actuators, so the whole stack runs without hardware. ObotDeviceSim behaves
+// like a drive running the obot-controller firmware as far as its messages show. It is
+// used two ways:
+//   - SimMotor: a motor-realtime Motor backed by one, in this process (unit tests,
+//     `interface = "sim"`, `obot-rtd --sim`). The daemon talks to it exactly as it talks
+//     to a real motor.
+//   - obot-sim-node: nodes on a CAN interface such as vcan0, for testing against the
+//     library's real CAN transport.
 #pragma once
 
 #include <cstdint>
 #include <limits>
-#include <memory>
-#include <vector>
+#include <string>
 
-#include "obot/actuator/cubemars_driver.h"
-#include "obot/can/bus.h"
+#include <motor.h>
 
 namespace obot::sim {
 
@@ -33,16 +36,7 @@ class JointPlant {
     PlantParams p_;
 };
 
-class Device {
- public:
-    virtual ~Device() = default;
-    virtual bool accepts(uint32_t can_id) const = 0;
-    virtual void on_frame(const can::Frame& frame, can::Bus& bus) = 0;
-    virtual void step(float dt) = 0;
-};
-
 struct ObotDeviceParams {
-    uint8_t address = 1;
     float gear_ratio = 1;
     float torque_constant = 0.1f;   // N m / A at the motor
     float current_limit = 40;       // A
@@ -51,17 +45,17 @@ struct ObotDeviceParams {
     float velocity_bandwidth = 30;  // rad/s, VELOCITY mode: a critically damped PI tuned for the plant
     float temperature = 30;         // deg C, reported through round robin
     float bus_voltage = 48;         // V
-    bool lite_status = false;       // reply with the 48 byte status instead of the 60 byte one
     PlantParams plant;
 };
 
 // Behaves like obot-controller firmware as far as the host can see it.
-class ObotDeviceSim : public Device {
+class ObotDeviceSim {
  public:
     explicit ObotDeviceSim(const ObotDeviceParams& params);
-    bool accepts(uint32_t can_id) const override;
-    void on_frame(const can::Frame& frame, can::Bus& bus) override;
-    void step(float dt) override;
+    void on_command(const MotorCommand& command);
+    // The status the drive would send now. false if it is not answering.
+    bool make_status(MotorStatus& out);
+    void step(float dt);
 
     JointPlant& plant() { return plant_; }
     // Test hooks.
@@ -72,10 +66,9 @@ class ObotDeviceSim : public Device {
     uint32_t last_host_timestamp() const { return host_timestamp_; }
 
  private:
-    void send_status(can::Bus& bus);
     ObotDeviceParams p_;
     JointPlant plant_;
-    uint8_t command_[64] = {};
+    MotorCommand command_{};
     uint8_t mode_ = 0;
     uint32_t error_ = 0;
     bool safe_mode_ = false;
@@ -92,48 +85,33 @@ class ObotDeviceSim : public Device {
     bool silent_ = false;
 };
 
-struct CubeMarsDeviceParams {
-    uint8_t id = 1;
-    uint32_t reply_id = 0;  // 0: reply with the same id
-    actuator::CubeMarsRanges ranges;
-    float temperature = 30;
-    PlantParams plant;
-};
-
-class CubeMarsDeviceSim : public Device {
+// A motor-realtime Motor whose other end is an ObotDeviceSim. A command written to it is
+// answered with a status, as a real drive answers when asked to.
+class SimMotor : public Motor {
  public:
-    explicit CubeMarsDeviceSim(const CubeMarsDeviceParams& params);
-    bool accepts(uint32_t can_id) const override { return can_id == p_.id; }
-    void on_frame(const can::Frame& frame, can::Bus& bus) override;
-    void step(float dt) override;
+    SimMotor(const std::string& name, const ObotDeviceParams& params);
 
-    JointPlant& plant() { return plant_; }
-    bool motor_mode() const { return motor_mode_; }
-    void inject_error(uint8_t code) { error_ = code; }
+    ssize_t write() override;
+    ssize_t read() override;
+    ssize_t aread() override { return 0; }
+    int set_nonblock() override { return 0; }
+    int clear_nonblock() override { return 0; }
+    int lock() override { return 0; }
+    void set_timeout_ms(int) override {}
+    int get_timeout_ms() const override { return 0; }
+
+    ObotDeviceSim& device() { return device_; }
+    void step(float dt) { device_.step(dt); }
+    // Test hooks: a drive without power neither hears nor answers; a write that fails.
+    void set_powered(bool powered) { powered_ = powered; }
+    void fail_writes(int count) { fail_writes_ = count; }
 
  private:
-    CubeMarsDeviceParams p_;
-    JointPlant plant_;
-    bool motor_mode_ = false;
-    float p_des_ = 0, v_des_ = 0, kp_ = 0, kd_ = 0, t_ff_ = 0;
-    float tau_ = 0;
-    uint8_t error_ = 0;
-};
-
-// The devices on one bus.
-class DeviceBus {
- public:
-    explicit DeviceBus(can::Bus& bus) : bus_(bus) {}
-    void add(std::unique_ptr<Device> device) { devices_.push_back(std::move(device)); }
-    // Deliver pending frames to the devices (which may reply). Returns frames handled.
-    int pump();
-    void step(float dt);
-    Device& device(size_t i) { return *devices_[i]; }
-    size_t size() const { return devices_.size(); }
-
- private:
-    can::Bus& bus_;
-    std::vector<std::unique_ptr<Device>> devices_;
+    ObotDeviceSim device_;
+    MotorStatus reply_{};
+    bool pending_ = false;
+    bool powered_ = true;
+    int fail_writes_ = 0;
 };
 
 }  // namespace obot::sim

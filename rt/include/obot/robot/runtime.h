@@ -1,4 +1,4 @@
-// The control cycle: commands in, frames out, statuses in, state out. Owns the robot's
+// The control cycle: commands in, motor commands out, statuses in, state out. Owns the robot's
 // mode, the watchdogs and the limits. Does no timing and no blocking itself, so the same
 // code runs under the realtime loop and under deterministic tests.
 //
@@ -10,8 +10,8 @@
 #include <memory>
 #include <vector>
 
-#include "obot/actuator/driver.h"
-#include "obot/can/bus.h"
+#include "obot/actuator/motors.h"
+#include "obot/actuator/obot_driver.h"
 #include "obot/control/setpoint_filter.h"
 #include "obot/ipc/layout.h"
 #include "obot/robot/config.h"
@@ -27,15 +27,17 @@ struct CycleTiming {
 
 class Runtime {
  public:
-    // buses[i] carries config.buses[i]. The buses must outlive the runtime.
-    Runtime(const RobotConfig& config, std::vector<can::Bus*> buses);
+    // motors: one per joint of the configuration, in the same order. They must outlive
+    // the runtime.
+    Runtime(const RobotConfig& config, actuator::Motors& motors);
 
     ipc::RobotInfo info() const;
 
     // command: the newest command from the mailbox, or nullptr if nothing has ever been written.
     void begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* command);
 
-    // Drain the buses. Returns the number of joints that have not replied in this cycle.
+    // Take the statuses that have arrived. Returns the number of joints that have not
+    // replied in this cycle.
     int poll_rx(int64_t now_mono_ns);
 
     void end_cycle(int64_t now_mono_ns, ipc::RobotState& out);
@@ -47,8 +49,7 @@ class Runtime {
  private:
     struct Joint {
         JointConfig cfg;
-        std::unique_ptr<actuator::Driver> driver;
-        can::Bus* bus = nullptr;
+        actuator::ObotDriver driver;
         control::SetpointFilter position_filter;
         control::RateLimiter velocity_limiter;
         actuator::DriveCommand sent;
@@ -70,9 +71,8 @@ class Runtime {
     void update_odometry();
 
     RobotConfig config_;
-    std::vector<can::Bus*> buses_;
+    actuator::Motors& motors_;
     std::vector<Joint> joints_;
-    std::vector<uint64_t> bus_rx_errors_;
 
     ipc::RobotMode mode_ = ipc::RobotMode::Init;
     uint32_t fault_ = 0;

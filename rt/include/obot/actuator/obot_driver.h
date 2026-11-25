@@ -1,24 +1,15 @@
-// Driver for actuators running the obot-controller firmware (motorlib CANCommunication):
-// CAN FD with bit rate switch, 11 bit id = message << 7 | address, MotorCommand in,
-// MotorStatus out. See motor_messages.h and motorlib/communication/can_communication.h.
+// Joint space to the obot-controller firmware's messages and back: a DriveCommand becomes
+// a MotorCommand, a MotorStatus becomes a DriveStatus. No I/O happens here; how the
+// messages reach the actuator (CAN FD, USB, ...) is motor-realtime's business, see motors.h.
 #pragma once
+
+#include <motor_messages.h>
 
 #include "obot/actuator/driver.h"
 
 namespace obot::actuator {
 
-namespace obot_can {
-inline constexpr uint32_t kCmd = 0x1;          // command, no reply
-inline constexpr uint32_t kCmdStatus = 0x2;    // command, reply with status
-inline constexpr uint32_t kStatus = 0x3;       // status; an empty frame from the host requests one
-inline constexpr uint32_t kMaxAddress = 0x7e;  // 0x7f is the enumeration broadcast
-constexpr uint32_t can_id(uint32_t message, uint32_t address) {
-    return message << 7 | address;
-}
-}  // namespace obot_can
-
 struct ObotDriverConfig {
-    uint8_t address = 1;
     Transmission transmission;
     bool idle_damped = true;      // Idle: DAMPED (true) or OPEN (false)
     bool output_encoder = false;  // joint position from the output encoder instead of motor / ratio
@@ -27,21 +18,23 @@ struct ObotDriverConfig {
                                   // otherwise velocity damping with this gain, N m s / rad
 };
 
-class ObotDriver : public Driver {
+class ObotDriver {
  public:
-    explicit ObotDriver(const ObotDriverConfig& config);
+    ObotDriver() = default;
+    explicit ObotDriver(const ObotDriverConfig& config) : config_(config) {}
 
-    void make_frame(const DriveCommand& command, bool poll_only, uint32_t cycle, can::Frame& out) override;
-    uint32_t rx_id() const override { return obot_can::can_id(obot_can::kStatus, config_.address); }
-    bool on_frame(const can::Frame& frame) override;
-    unsigned tx_len() const override { return 48; }
-    unsigned rx_len() const override { return 64; }
-    bool uses_fd() const override { return true; }
+    // The command to send this cycle. `cycle` goes out as the host timestamp, which the
+    // drive echoes in its status.
+    void fill(const DriveCommand& command, uint32_t cycle, MotorCommand& out) const;
+
+    // A status that has just arrived.
+    void on_status(const MotorStatus& status, int64_t rx_time_ns);
+
+    const DriveStatus& status() const { return status_; }
 
  private:
     ObotDriverConfig config_;
-    float last_q_ = 0;
-    int64_t last_rx_ns_ = 0;
+    DriveStatus status_;
 };
 
 }  // namespace obot::actuator
