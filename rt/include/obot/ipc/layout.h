@@ -105,8 +105,8 @@ struct RobotState {
     uint32_t command_source;
     int32_t command_age_us;   // age of that command, -1 if there has been none
     int32_t wake_latency_ns;  // how late the cycle started
-    int32_t exec_ns;          // start of cycle to state published
-    int32_t rx_wait_ns;       // start of cycle to last status received, -1 if none
+    int32_t exec_ns;          // how long the cycle before this one took
+    int32_t rx_wait_ns;       // start of cycle until the statuses were read
     uint32_t overruns;        // cycles that missed their period, total
     double odom_x;            // base odometry in the frame the daemon started in, m
     double odom_y;

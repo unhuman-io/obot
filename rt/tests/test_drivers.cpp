@@ -1,5 +1,5 @@
-// Joint space <-> the firmware's messages, and the path those messages take: through
-// motor-realtime's Motor and MotorManager, here with simulated motors on the other end.
+// Joint space <-> the firmware's messages, and the simulated motors that stand in for real
+// ones behind motor-realtime's Motor and MotorManager.
 #include "doctest.h"
 
 #include <cmath>
@@ -7,7 +7,8 @@
 #include <stdexcept>
 #include <vector>
 
-#include "obot/actuator/motors.h"
+#include <motor_manager.h>
+
 #include "obot/actuator/obot_driver.h"
 #include "obot/sim/devices.h"
 
@@ -101,60 +102,64 @@ TEST_CASE("obot driver: status is converted back to joint units") {
     CHECK(d.status().bus_voltage == doctest::Approx(47.5f));  // kept from the earlier status
 }
 
-TEST_CASE("motors: commands go out and statuses come back through motor-realtime") {
+TEST_CASE("simulated motors behave like real ones to motor-realtime's manager") {
     sim::ObotDeviceParams p;
     auto a = std::make_shared<sim::SimMotor>("a", p);
     auto b = std::make_shared<sim::SimMotor>("b", p);
-    actuator::Motors motors({a, b});
-    REQUIRE(motors.size() == 2);
-    CHECK(motors.motor(1).name() == "b");
+    MotorManager manager;
+    manager.set_motors({a, b});
+    manager.set_throw_on_error(false);
+    for (auto& m : manager.motors()) {
+        m->set_cmd_status_req();
+        m->set_nonblock();
+    }
+    CHECK(manager.motors()[1]->name() == "b");
 
-    motors.read();  // nothing was asked yet
-    CHECK_FALSE(motors.fresh(0));
-    CHECK_FALSE(motors.fresh(1));
+    manager.read();  // nothing was asked yet
+    CHECK_FALSE(manager.get_status_fresh()[0]);
+    CHECK_FALSE(manager.get_status_fresh()[1]);
 
-    motors.command(0).mode_desired = CURRENT;
-    motors.command(0).current_desired = 2.0f;
-    motors.command(0).host_timestamp = 1;
-    motors.command(1).mode_desired = DAMPED;
-    motors.command(1).host_timestamp = 1;
-    motors.write();
-    CHECK_FALSE(motors.tx_failed(0));
+    manager.commands()[0].mode_desired = CURRENT;
+    manager.commands()[0].current_desired = 2.0f;
+    manager.commands()[0].host_timestamp = 1;
+    manager.commands()[1].mode_desired = DAMPED;
+    manager.commands()[1].host_timestamp = 1;
+    manager.write_saved_commands();
     a->step(0.001f);
     b->step(0.001f);
-    motors.wait(100'000);  // simulated motors have answered already: does not wait
-    motors.read();
-    CHECK(motors.fresh(0));
-    CHECK(motors.fresh(1));
-    CHECK(motors.status(0).host_timestamp_received == 1);
+    CHECK(manager.multipoll(100'000) == 2);  // simulated motors have answered already: does not wait
+    manager.read();
+    CHECK(manager.get_status_fresh()[0]);
+    CHECK(manager.get_status_fresh()[1]);
+    CHECK(manager.get_statuses()[0].host_timestamp_received == 1);
     CHECK(a->device().mode() == CURRENT);
     CHECK(b->device().mode() == DAMPED);
 
     // Reading again without a new answer: the old status is still there, but not fresh.
-    motors.read();
-    CHECK_FALSE(motors.fresh(0));
-    CHECK(motors.status(0).host_timestamp_received == 1);
+    manager.read();
+    CHECK_FALSE(manager.get_status_fresh()[0]);
+    CHECK(manager.get_statuses()[0].host_timestamp_received == 1);
 
     // A motor that cannot be written to does not keep the other from being commanded.
     a->fail_writes(1);
-    motors.command(0).host_timestamp = 2;
-    motors.command(1).host_timestamp = 2;
-    motors.write();
-    CHECK(motors.tx_failed(0));
-    CHECK_FALSE(motors.tx_failed(1));
-    motors.read();
-    CHECK_FALSE(motors.fresh(0));
-    CHECK(motors.fresh(1));
+    manager.commands()[0].host_timestamp = 2;
+    manager.commands()[1].host_timestamp = 2;
+    manager.write_saved_commands();
+    CHECK(manager.get_write_error_count()[0] == 1);
+    CHECK(manager.get_write_error_count()[1] == 0);
+    manager.read();
+    CHECK_FALSE(manager.get_status_fresh()[0]);
+    CHECK(manager.get_status_fresh()[1]);
     CHECK(b->device().last_host_timestamp() == 2);
     CHECK(a->device().last_host_timestamp() == 1);
 
     // A drive without power: the command is "sent", nothing comes back.
     b->set_powered(false);
-    motors.command(1).host_timestamp = 3;
-    motors.write();
-    CHECK_FALSE(motors.tx_failed(1));
-    motors.read();
-    CHECK_FALSE(motors.fresh(1));
+    manager.commands()[1].host_timestamp = 3;
+    manager.write_saved_commands();
+    CHECK(manager.get_write_error_count()[1] == 0);
+    manager.read();
+    CHECK_FALSE(manager.get_status_fresh()[1]);
 }
 
 namespace {
@@ -165,28 +170,26 @@ class OldFirmware : public sim::SimMotor {
 };
 }  // namespace
 
-TEST_CASE("motors: firmware that speaks another messages version is refused") {
-    CHECK_THROWS_WITH_AS(actuator::Motors({std::make_shared<OldFirmware>()}), doctest::Contains("version"),
-                         std::runtime_error);
+TEST_CASE("firmware that speaks another messages version is refused") {
+    MotorManager manager;
+    CHECK_THROWS_WITH(manager.set_motors({std::make_shared<OldFirmware>()}), doctest::Contains("version"));
 }
 
 TEST_CASE("simulated actuator: host timeout faults it, clear faults recovers") {
     sim::ObotDeviceParams p;
     p.host_timeout_s = 0.02f;
-    auto motor = std::make_shared<sim::SimMotor>("m", p);
-    sim::ObotDeviceSim& device = motor->device();
-    actuator::Motors motors({motor});
+    sim::SimMotor motor("m", p);
+    sim::ObotDeviceSim& device = motor.device();
     ObotDriver d(actuator::ObotDriverConfig{});
 
     uint32_t count = 0;
     const auto cycle = [&](const DriveCommand& c, bool send) {
         if (send) {
-            d.fill(c, ++count, motors.command(0));
-            motors.write();
+            d.fill(c, ++count, *motor.command());
+            motor.write();
         }
-        motor->step(0.001f);
-        motors.read();
-        if (motors.fresh(0)) d.on_status(motors.status(0), 0);
+        motor.step(0.001f);
+        if (motor.read() > 0) d.on_status(*motor.status(), 0);
     };
 
     DriveCommand c;

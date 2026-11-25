@@ -114,15 +114,21 @@ What the daemon adds is the joint's view: position and impedance use the firmwar
 controller with gains converted to motor units, velocity uses VELOCITY, torque uses
 CURRENT, idle is DAMPED (or OPEN).
 
-Each cycle it writes every command (over CAN as "command, reply with your status"), waits
-with the library's `multipoll` until all motors have answered or the receive deadline
-passes, and reads. Things to know:
+The realtime loop itself is the library's `MotorThread`, in its fault tolerant mode: each
+period it reads every motor's status (waiting until all have answered, at most the receive
+deadline), calls the daemon's control cycle, and writes the commands, over CAN as "command,
+reply with your status". The daemon configures it for SCHED_FIFO on the isolated CPU. A
+motor that is late or gone does not stop the loop; the control cycle sees that its status
+is not fresh and faults the robot after `comm_timeout_cycles`. Things to know:
 
 - All motors have to be there when the daemon starts; it exits with a message naming the
   missing one, and systemd starts it again.
-- Over CAN the library keeps a lock file per node in `/tmp` (`obot.can0:3.lock`). One left
-  behind by `motor_util` run as another user keeps the daemon from opening the node:
-  remove it.
+- USB boards need the `usb_rt` kernel driver 0.8.0 or newer. In 0.7.1, a board that loses
+  power while in use leaves the reading thread deadlocked in the kernel, and the daemon
+  can then not be stopped without a reboot. `deploy.sh` checks the version.
+- The submodule currently points at the branch of
+  [motor-realtime #277](https://github.com/unhuman-io/motor-realtime/pull/277); move it to
+  `develop` once that is merged.
 
 ### How many joints fit on a CAN bus
 

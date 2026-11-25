@@ -1,5 +1,6 @@
-// The control cycle against simulated motors (reached through motor-realtime, like real
-// ones), with a simulated clock: every test is deterministic and runs faster than real time.
+// The control cycle against simulated motors, in the order motor-realtime's MotorThread
+// runs it (read the statuses, update, write the commands) and through its MotorManager,
+// but with a simulated clock: every test is deterministic and runs faster than real time.
 #include "doctest.h"
 
 #include <cmath>
@@ -8,7 +9,8 @@
 #include <string>
 #include <vector>
 
-#include "obot/actuator/motors.h"
+#include <motor_manager.h>
+
 #include "obot/ipc/shm_region.h"
 #include "obot/robot/config.h"
 #include "obot/robot/motor_factory.h"
@@ -101,21 +103,29 @@ enum { kShoulder = 0, kWrist = 1, kLeft = 2, kRight = 3 };
 struct Rig {
     robot::RobotConfig config;
     std::vector<sim::SimMotor*> sims;  // one per joint
-    std::unique_ptr<actuator::Motors> motors;
+    MotorManager manager;
     std::unique_ptr<robot::Runtime> runtime;
     ipc::RobotCommand command{};
     bool have_command = false;
     ipc::RobotState state{};
     int64_t now = 1'000'000'000;
     bool devices_powered = true;
+    bool fresh[ipc::kMaxJoints] = {};
+    bool write_failed[ipc::kMaxJoints] = {};
 
     explicit Rig(const char* toml = kRobot) : config(robot::parse_config(toml)) {
         robot::OpenedMotors opened = robot::open_motors(config);
         sims = opened.simulated;
         REQUIRE(sims.size() == config.joints.size());
         for (sim::SimMotor* m : sims) m->step(0.001f);  // the drives have been running for a while
-        motors = std::make_unique<actuator::Motors>(std::move(opened.motors));
-        runtime = std::make_unique<robot::Runtime>(config, *motors);
+        // What MotorThread's fault tolerant mode sets up.
+        manager.set_motors(opened.motors);
+        manager.set_throw_on_error(false);
+        for (auto& m : manager.motors()) {
+            m->set_cmd_status_req();
+            m->set_nonblock();
+        }
+        runtime = std::make_unique<robot::Runtime>(config);
     }
 
     // The simulated drive of a joint.
@@ -132,17 +142,23 @@ struct Rig {
         have_command = true;
     }
 
-    void cycle() {
+    void cycle(bool overrun = false) {
         now += static_cast<int64_t>(config.period_us) * 1000;
         robot::CycleTiming timing;
         timing.now_mono_ns = now;
         timing.now_real_ns = now;
+        timing.overrun = overrun;
         for (sim::SimMotor* m : sims) m->set_powered(devices_powered);
-        runtime->begin_cycle(timing, have_command ? &command : nullptr);
+        manager.read();
+        for (size_t i = 0; i < sims.size(); ++i) {
+            fresh[i] = manager.get_status_fresh()[i];
+            write_failed[i] = manager.get_write_error_count()[i] > 0;
+        }
+        const robot::MotorIo io{manager.get_statuses().data(), fresh, write_failed, manager.commands().data()};
+        runtime->update(timing, have_command ? &command : nullptr, io, state);
+        manager.write_saved_commands();
         const float dt = static_cast<float>(config.period_us) * 1e-6f;
         for (sim::SimMotor* m : sims) m->step(dt);
-        runtime->poll_rx(now + 200'000);
-        runtime->end_cycle(now + 300'000, state);
     }
 
     // Run cycles, re-sending the current command every `resend_every` cycles as a client would.
@@ -530,13 +546,8 @@ TEST_CASE("disable and shutdown return the drives to idle") {
 TEST_CASE("overruns are counted and flagged") {
     Rig r;
     r.run(10, 0);
-    robot::CycleTiming t;
-    t.now_mono_ns = r.now + 5'000'000;
-    t.overrun = true;
-    r.runtime->begin_cycle(t, nullptr);
-    for (sim::SimMotor* m : r.sims) m->step(0.001f);
-    r.runtime->poll_rx(t.now_mono_ns);
-    r.runtime->end_cycle(t.now_mono_ns, r.state);
+    r.now += 5'000'000;  // the cycle before this one took 5 ms too long
+    r.cycle(true);
     CHECK(r.state.overruns == 1);
     CHECK((r.state.warning & ipc::robot_warning::kOverrun) != 0);
 }
@@ -630,10 +641,12 @@ TEST_CASE("a command that cannot be sent is flagged, and the other drives still 
     CHECK(r.state.warning == 0);
     const uint32_t shoulder_before = r.device(kShoulder).last_host_timestamp();
     r.sims[kShoulder]->fail_writes(1);
-    r.cycle();
+    r.cycle();  // the write at the end of this cycle fails...
+    CHECK(r.state.warning == 0);
+    r.cycle();  // ...which the next cycle knows, and it has no status from that drive
     CHECK((r.state.warning & ipc::robot_warning::kTxDropped) != 0);
-    CHECK(r.device(kShoulder).last_host_timestamp() == shoulder_before);  // it never arrived
-    CHECK(r.device(kWrist).last_host_timestamp() == shoulder_before + 1);
+    CHECK(r.device(kWrist).last_host_timestamp() == shoulder_before + 2);
+    CHECK(r.device(kShoulder).last_host_timestamp() == shoulder_before + 2);  // and is back in step
     CHECK(r.state.rx_miss[kShoulder] == 1);
     CHECK(r.state.rx_miss[kWrist] == 0);
     r.run(10);

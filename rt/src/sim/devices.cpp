@@ -125,6 +125,7 @@ SimMotor::SimMotor(const std::string& name, const ObotDeviceParams& params) : de
     dev_path_ = "sim";
     board_name_ = "simulated";
     messages_version_ = MOTOR_MESSAGES_VERSION;
+    motor_txt_ = std::make_unique<SimulatedTextFile>();  // what the library asks a motor at start-up
     // Something the library can poll: always readable, like a drive that has answered.
     fd_ = ::open("/dev/zero", O_RDONLY | O_CLOEXEC);
     fd_flags_ = 0;

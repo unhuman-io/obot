@@ -17,9 +17,10 @@ struct OpenedMotors {
     std::vector<sim::SimMotor*> simulated;       // those of them that are simulated
 };
 
-// Joints on a "sim" bus get simulated motors, on a "usbrt" bus the board with their name,
-// otherwise the node with their id on that CAN interface.
-// Throws std::runtime_error when a motor is not there.
+// Joints on a "sim" bus get simulated motors, on a "usbrt" bus the board with their name
+// (locked for this process: motor_util honours the same lock), otherwise the node with
+// their id on that CAN interface. Throws std::runtime_error when a motor is not there,
+// naming it and, for USB, the boards that are.
 OpenedMotors open_motors(const RobotConfig& config);
 
 }  // namespace obot::robot

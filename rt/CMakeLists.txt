@@ -36,12 +36,17 @@ add_library(motor_realtime STATIC
   ${MR}/src/motor/motor_eth_l2.cpp
   ${MR}/src/motor/motor_uart.cpp
   ${MR}/src/motor/motor_uart_obot.cpp
+  ${MR}/src/motor/motor_thread.cpp
+  ${MR}/src/motor/realtime_thread.cpp
   ${MR}/src/motor/terminal.cpp
   ${MR}/3rdparty/obot-protocol/protocol_parser.cpp
 )
 target_include_directories(motor_realtime SYSTEM PUBLIC ${MR}/include ${MR}/3rdparty/obot-protocol)
 target_compile_options(motor_realtime PRIVATE -w)   # not our code: its warnings are not ours to fix here
 target_link_libraries(motor_realtime PUBLIC Threads::Threads)
+# The realtime loop is the library's MotorThread; its fixed-size records have to hold as
+# many motors as a robot can have joints (ipc::kMaxJoints).
+target_compile_definitions(motor_realtime PUBLIC MAX_MOTORS=16)
 # The library finds USB boards with libudev.
 if(OBOT_RT_STATIC)
   # There is no static libudev to link (systemd does not provide one). libudev-zero is a
@@ -81,7 +86,6 @@ if(OBOT_RT_SANITIZE)
 endif()
 
 add_library(obot_rt STATIC
-  src/actuator/motors.cpp
   src/actuator/obot_driver.cpp
   src/ipc/layout_json.cpp
   src/ipc/shm_region.cpp

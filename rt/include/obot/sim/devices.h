@@ -94,8 +94,14 @@ class SimMotor : public Motor {
     ssize_t write() override;
     ssize_t read() override;
     ssize_t aread() override { return 0; }
-    int set_nonblock() override { return 0; }
-    int clear_nonblock() override { return 0; }
+    int set_nonblock() override {
+        nonblock_ = true;
+        return 0;
+    }
+    int clear_nonblock() override {
+        nonblock_ = false;
+        return 0;
+    }
     int lock() override { return 0; }
     void set_timeout_ms(int) override {}
     int get_timeout_ms() const override { return 0; }

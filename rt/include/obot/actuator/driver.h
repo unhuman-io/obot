@@ -1,6 +1,6 @@
 // One actuator seen in joint space (radians, rad/s, N m at the joint): what the control
 // cycle asks of it and what it reports. obot_driver.h turns these into the firmware's
-// MotorCommand and back from its MotorStatus; motors.h carries those to the actuators.
+// MotorCommand and back from its MotorStatus; motor-realtime carries those to the actuators.
 #pragma once
 
 #include <cstdint>

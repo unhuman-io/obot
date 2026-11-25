@@ -1,8 +1,8 @@
-// The control cycle: commands in, motor commands out, statuses in, state out. Owns the robot's
-// mode, the watchdogs and the limits. Does no timing and no blocking itself, so the same
-// code runs under the realtime loop and under deterministic tests.
-//
-// A cycle is:  begin_cycle()  ->  poll_rx() one or more times  ->  end_cycle()
+// The control cycle: the motors' statuses and the client's command in, the motors'
+// commands and the robot's state out. Owns the robot's mode, the watchdogs and the limits.
+// Does no I/O and no timing itself, so the same code runs inside the realtime thread
+// (motor-realtime's MotorThread, which reads the statuses, calls update() and writes the
+// commands) and in deterministic tests.
 #pragma once
 
 #include <array>
@@ -10,7 +10,6 @@
 #include <memory>
 #include <vector>
 
-#include "obot/actuator/motors.h"
 #include "obot/actuator/obot_driver.h"
 #include "obot/control/setpoint_filter.h"
 #include "obot/ipc/layout.h"
@@ -22,25 +21,30 @@ struct CycleTiming {
     int64_t now_mono_ns = 0;
     int64_t now_real_ns = 0;
     int32_t wake_latency_ns = 0;
-    bool overrun = false;  // the previous cycle ran past its period
+    bool overrun = false;     // the previous cycle ran past its period
+    int32_t exec_ns = 0;      // how long the previous cycle took
+    int32_t rx_wait_ns = -1;  // how long this cycle waited for the statuses, -1 if unknown
+};
+
+// What a cycle exchanges with the motors, one entry per joint in configuration order.
+struct MotorIo {
+    const MotorStatus* statuses;  // the last status of each motor
+    const bool* fresh;            // it arrived since the cycle before
+    const bool* write_failed;     // the command of the cycle before could not be written
+    MotorCommand* commands;       // filled in: what to send now
 };
 
 class Runtime {
  public:
-    // motors: one per joint of the configuration, in the same order. They must outlive
-    // the runtime.
-    Runtime(const RobotConfig& config, actuator::Motors& motors);
+    explicit Runtime(const RobotConfig& config);
 
     ipc::RobotInfo info() const;
+    size_t num_joints() const { return joints_.size(); }
 
-    // command: the newest command from the mailbox, or nullptr if nothing has ever been written.
-    void begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* command);
-
-    // Take the statuses that have arrived. Returns the number of joints that have not
-    // replied in this cycle.
-    int poll_rx(int64_t now_mono_ns);
-
-    void end_cycle(int64_t now_mono_ns, ipc::RobotState& out);
+    // One cycle. command: the newest command from the mailbox, or nullptr if nothing has
+    // ever been written. A status answers the command of the cycle before, so a motor
+    // that is not fresh has missed one.
+    void update(const CycleTiming& timing, const ipc::RobotCommand* command, const MotorIo& io, ipc::RobotState& out);
 
     ipc::RobotMode mode() const { return mode_; }
     // Ask for the drives to be idled from outside the command path (daemon shutdown).
@@ -69,9 +73,12 @@ class Runtime {
     void enter_active();
     void command_joint(Joint& j, size_t index, bool fresh, float dt);
     void update_odometry();
+    void take_statuses(const MotorIo& io);
+    void evaluate();
+    void command_motors(const ipc::RobotCommand* command, const MotorIo& io);
+    void publish(ipc::RobotState& out) const;
 
     RobotConfig config_;
-    actuator::Motors& motors_;
     std::vector<Joint> joints_;
 
     ipc::RobotMode mode_ = ipc::RobotMode::Init;
@@ -80,7 +87,6 @@ class Runtime {
     uint64_t cycle_ = 0;
     uint32_t overruns_ = 0;
     CycleTiming timing_;
-    int64_t last_rx_ns_ = 0;
 
     ipc::RobotCommand command_{};  // last accepted command
     bool have_command_ = false;

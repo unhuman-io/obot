@@ -20,6 +20,11 @@ if [ "${OBOT_ISOLATE:-0}" = 1 ]; then
 fi
 # Not a failure of the deployment, but it decides what the latency numbers below are worth.
 if [ "$(cat /sys/kernel/realtime 2>/dev/null)" = 1 ]; then echo "ok    kernel is PREEMPT_RT"; else echo "WARN  kernel is not PREEMPT_RT ($(uname -r))"; fi
+if [ -e /sys/module/usb_rt/version ]; then
+    # 0.7.1 deadlocks the reader in the kernel when a board loses power while in use.
+    check "usb_rt driver is 0.8.0 or newer (has $(cat /sys/module/usb_rt/version))" \
+        "[ \"\$(printf '%s\\n' 0.8.0 \"\$(cat /sys/module/usb_rt/version)\" | sort -V | head -1)\" = 0.8.0 ]"
+fi
 if [ "${OBOT_TOOLS:-1}" = 1 ]; then
     # Give the page a moment after a restart.
     for _ in 1 2 3 4 5 6 7 8 9 10; do curl -sf -m 2 http://127.0.0.1:8080/api/info >/dev/null && break; sleep 1; done

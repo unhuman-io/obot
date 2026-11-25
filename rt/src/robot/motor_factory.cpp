@@ -1,10 +1,44 @@
 #include "obot/robot/motor_factory.h"
 
 #include <algorithm>
+#include <stdexcept>
 
-#include "obot/actuator/motors.h"
+#include <motor_can.h>
+#include <motor_manager.h>
 
 namespace obot::robot {
+
+namespace {
+std::shared_ptr<Motor> open_usb_motor(const std::string& name) {
+    MotorManager finder;
+    std::vector<std::shared_ptr<Motor>> found;
+    try {
+        found = finder.get_motors_by_name({name}, false);
+    } catch (const std::exception&) {
+        std::string present;
+        try {
+            for (const auto& m : finder.get_connected_motors(false))
+                present += (present.empty() ? "" : ", ") + m->name();
+        } catch (const std::exception&) {
+        }
+        throw std::runtime_error("usb: no board named " + name +
+                                 "; boards present: " + (present.empty() ? "none" : present));
+    }
+    if (found[0]->lock() != 0) {
+        throw std::runtime_error("usb: board " + name + " is in use by another program");
+    }
+    return found[0];
+}
+
+std::shared_ptr<Motor> open_can_motor(const std::string& interface, int id) {
+    const std::string address = interface + ":" + std::to_string(id);
+    try {
+        return std::make_shared<MotorCAN>(address);
+    } catch (const std::exception& e) {
+        throw std::runtime_error("can: node " + address + ": " + e.what());
+    }
+}
+}  // namespace
 
 std::shared_ptr<sim::SimMotor> make_sim_motor(const JointConfig& joint, const RobotConfig& config) {
     // The simulated plant lives in the drive's frame: undo the joint's direction and zero.
@@ -38,9 +72,9 @@ OpenedMotors open_motors(const RobotConfig& config) {
             out.simulated.push_back(motor.get());
             out.motors.push_back(std::move(motor));
         } else if (bus.interface == "usbrt") {
-            out.motors.push_back(actuator::open_usb_motor(joint.usb_name));
+            out.motors.push_back(open_usb_motor(joint.usb_name));
         } else {
-            out.motors.push_back(actuator::open_can_motor(bus.interface, joint.id));
+            out.motors.push_back(open_can_motor(bus.interface, joint.id));
         }
     }
     return out;

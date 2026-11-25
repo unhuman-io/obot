@@ -1,6 +1,6 @@
 // Joint space to the obot-controller firmware's messages and back: a DriveCommand becomes
 // a MotorCommand, a MotorStatus becomes a DriveStatus. No I/O happens here; how the
-// messages reach the actuator (CAN FD, USB, ...) is motor-realtime's business, see motors.h.
+// messages reach the actuator (CAN FD, USB, ...) is motor-realtime's business.
 #pragma once
 
 #include <motor_messages.h>

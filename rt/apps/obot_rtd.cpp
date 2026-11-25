@@ -5,7 +5,6 @@
 // One thread runs the control cycle at the configured period under SCHED_FIFO on the
 // configured CPU; the main thread only reports. Everything else on the robot talks to
 // this process through the shared memory region (see obot/ipc/layout.h).
-#include <poll.h>
 #include <signal.h>
 
 #include <atomic>
@@ -19,7 +18,8 @@
 #include <thread>
 #include <vector>
 
-#include "obot/actuator/motors.h"
+#include <motor_thread.h>
+
 #include "obot/robot/motor_factory.h"
 #include "obot/ipc/layout_json.h"
 #include "obot/ipc/shm_region.h"
@@ -113,83 +113,99 @@ bool parse(int argc, char** argv, Options& o) {
     return o.dump_layout || !o.config.empty();
 }
 
-// Everything the control thread touches.
-struct Loop {
-    robot::RobotConfig config;
-    std::unique_ptr<actuator::Motors> motors;  // every actuator, through motor-realtime
-    std::vector<sim::SimMotor*> simulated;     // those of them that are simulated
-    std::unique_ptr<robot::Runtime> runtime;
-    ipc::ShmRegion* shm = nullptr;
-    rt::Histogram latency;
-    rt::Histogram exec;
-    std::vector<std::string> setup_problems;
-    std::atomic<bool> setup_done{false};
-    bool realtime = true;
+// The realtime loop is motor-realtime's MotorThread: each period it reads every motor's
+// status, calls controller_update() below, and writes the commands that leaves in the
+// motor manager. In its fault tolerant mode a motor that is late or gone does not stop
+// it; what the robot does about such a motor is the Runtime's business.
+class RobotThread : public MotorThread {
+ public:
+    RobotThread(const robot::RobotConfig& config, bool realtime) : config_(config), runtime_(config) {
+        set_period_ns(static_cast<uint32_t>(config.period_us) * 1000u);
+        set_fault_tolerant();
+        set_poll_timeout(static_cast<uint32_t>(config.rt.rx_deadline_us) * 1000u);
+        // A fixed priority on a CPU of its own (isolcpus): SCHED_DEADLINE, the library's
+        // default, does not take a thread that is pinned.
+        set_scheduler(realtime && config.rt.priority > 0 ? FIFO : NORMAL, config.rt.priority);
+        set_cpu(realtime ? config.rt.cpu : -1);
+        set_lock_memory(realtime && config.rt.lock_memory);
+    }
 
-    void run() {
-        if (realtime) {
-            setup_problems = rt::setup_thread(rt::ThreadSetup{config.rt.cpu, config.rt.priority});
-        }
-        setup_done.store(true);
-
-        const int64_t period = static_cast<int64_t>(config.period_us) * 1000;
-        const int64_t rx_deadline = static_cast<int64_t>(config.rt.rx_deadline_us) * 1000;
-        const float dt = static_cast<float>(config.period_us) * 1e-6f;
-        ipc::RobotCommand command{};
-        ipc::RobotCommand scratch{};
-        bool have_command = false;
-        ipc::RobotState state{};
-        bool overrun = false;
-        int shutdown_cycles = -1;
-        int64_t next = rt::monotonic_ns() + period;
-
-        for (;;) {
-            const timespec wake = rt::to_timespec(next);
-            while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &wake, nullptr) == EINTR) {
-            }
-            const int64_t start = rt::monotonic_ns();
-
-            if (shutdown_cycles < 0 && g_stop.load(std::memory_order_relaxed)) {
-                runtime->request_shutdown();
-                shutdown_cycles = 20;  // enough cycles for every drive to receive an idle command
-            }
-
-            robot::CycleTiming timing;
-            timing.now_mono_ns = start;
-            timing.now_real_ns = rt::realtime_ns();
-            timing.wake_latency_ns = static_cast<int32_t>(start - next);
-            timing.overrun = overrun;
-            // Into a scratch copy first: a read that loses the race with a writer leaves
-            // its output half written, and the previous command must survive that.
-            if (shm->command_slot().read(scratch)) {
-                command = scratch;
-                have_command = true;
-            }
-            runtime->begin_cycle(timing, have_command ? &command : nullptr);
-
-            // Simulated actuators have answered already; real ones are waited for, until
-            // all have or the receive deadline passes.
-            for (sim::SimMotor* motor : simulated) motor->step(dt);
-            motors->wait(next + rx_deadline - rt::monotonic_ns());
-            runtime->poll_rx(rt::monotonic_ns());
-
-            const int64_t end = rt::monotonic_ns();
-            runtime->end_cycle(end, state);
-            shm->ring().push(state);
-            latency.add(start - next);
-            exec.add(end - start);
-
-            if (shutdown_cycles > 0 && --shutdown_cycles == 0) break;
-
-            next += period;
-            const int64_t now = rt::monotonic_ns();
-            overrun = now > next;
-            if (overrun) {
-                // Skip the periods that were missed instead of running a burst to catch up.
-                next += ((now - next) / period + 1) * period;
-            }
+    // Opens the motors the configuration names. Throws std::runtime_error.
+    void open_motors() {
+        robot::OpenedMotors opened = robot::open_motors(config_);
+        simulated_ = opened.simulated;
+        try {
+            motor_manager_.set_motors(opened.motors);  // checks the messages version
+            init();
+        } catch (const std::exception& e) {
+            throw std::runtime_error(e.what());
         }
     }
+
+    ipc::RobotInfo info() const { return runtime_.info(); }
+    void set_shm(ipc::ShmRegion* shm) { shm_ = shm; }
+    // After the drives have been sent idle commands for a few cycles following g_stop.
+    bool finished() const { return finished_.load(); }
+    uint32_t loop_overruns() const { return overruns(); }
+
+    rt::Histogram latency;
+    rt::Histogram exec;
+
+ protected:
+    void controller_update() override {
+        if (shutdown_cycles_ < 0 && g_stop.load(std::memory_order_relaxed)) {
+            runtime_.request_shutdown();
+            shutdown_cycles_ = 20;  // enough cycles for every drive to receive an idle command
+        }
+
+        const auto ns = [](std::chrono::steady_clock::time_point t) {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(t.time_since_epoch()).count();
+        };
+        robot::CycleTiming timing;
+        timing.now_mono_ns = ns(data_.time_start);  // steady_clock is CLOCK_MONOTONIC, as command stamps are
+        timing.now_real_ns = rt::realtime_ns();
+        timing.wake_latency_ns = static_cast<int32_t>(wake_latency_ns_);
+        timing.overrun = overrun_;
+        timing.exec_ns = last_exec_ns_;
+        timing.rx_wait_ns = static_cast<int32_t>(ns(data_.read_time) - ns(data_.time_start));
+
+        // Into a scratch copy first: a read that loses the race with a writer leaves its
+        // output half written, and the previous command must survive that.
+        if (shm_->command_slot().read(scratch_)) {
+            command_ = scratch_;
+            have_command_ = true;
+        }
+        const robot::MotorIo io{data_.statuses, data_.status_fresh, data_.write_failed,
+                                motor_manager_.commands().data()};
+        runtime_.update(timing, have_command_ ? &command_ : nullptr, io, state_);
+        shm_->ring().push(state_);
+        latency.add(wake_latency_ns_);
+
+        if (shutdown_cycles_ > 0 && --shutdown_cycles_ == 0) finished_.store(true);
+    }
+
+    // After the commands have gone out.
+    void post_update() override {
+        const float dt = static_cast<float>(config_.period_us) * 1e-6f;
+        for (sim::SimMotor* motor : simulated_) motor->step(dt);
+        last_exec_ns_ = static_cast<int32_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - data_.time_start)
+                .count());
+        exec.add(last_exec_ns_);
+    }
+
+ private:
+    robot::RobotConfig config_;
+    robot::Runtime runtime_;
+    std::vector<sim::SimMotor*> simulated_;
+    ipc::ShmRegion* shm_ = nullptr;
+    ipc::RobotCommand command_{};
+    ipc::RobotCommand scratch_{};
+    bool have_command_ = false;
+    ipc::RobotState state_{};
+    int shutdown_cycles_ = -1;
+    int32_t last_exec_ns_ = 0;
+    std::atomic<bool> finished_{false};
 };
 
 }  // namespace
@@ -205,17 +221,17 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    Loop loop;
+    robot::RobotConfig loaded;
     try {
-        loop.config = robot::load_config(opt.config);
-        robot::override_interfaces(loop.config, opt.sim, opt.bus_overrides);
-        if (!opt.shm_name.empty()) loop.config.shm_name = opt.shm_name;
-        if (opt.cpu > -2) loop.config.rt.cpu = opt.cpu;
+        loaded = robot::load_config(opt.config);
+        robot::override_interfaces(loaded, opt.sim, opt.bus_overrides);
+        if (!opt.shm_name.empty()) loaded.shm_name = opt.shm_name;
+        if (opt.cpu > -2) loaded.rt.cpu = opt.cpu;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "obot-rtd: %s\n", e.what());
         return 1;
     }
-    const robot::RobotConfig& config = loop.config;
+    const robot::RobotConfig& config = loaded;
 
     if (opt.print_can_setup) {
         // The bit rates live in the robot configuration; the system applies them with this.
@@ -254,31 +270,24 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // On the heap: it holds the library's history of the last cycles' records.
+    auto loop = std::make_unique<RobotThread>(config, !opt.no_rt);
     try {
-        robot::OpenedMotors opened = robot::open_motors(config);
-        loop.simulated = opened.simulated;
-        loop.motors = std::make_unique<actuator::Motors>(std::move(opened.motors));
-        loop.runtime = std::make_unique<robot::Runtime>(config, *loop.motors);
+        loop->open_motors();
     } catch (const std::exception& e) {
         std::fprintf(stderr, "obot-rtd: %s\n", e.what());
         return 1;
     }
 
-    loop.realtime = !opt.no_rt;
-    if (loop.realtime && config.rt.lock_memory) {
-        const std::string problem = rt::lock_memory();
-        if (!problem.empty()) std::fprintf(stderr, "obot-rtd: warning: %s\n", problem.c_str());
-    }
-
     ipc::ShmRegion shm = [&] {
         try {
-            return ipc::ShmRegion::create(config.shm_name, loop.runtime->info());
+            return ipc::ShmRegion::create(config.shm_name, loop->info());
         } catch (const std::exception& e) {
             std::fprintf(stderr, "obot-rtd: %s\n", e.what());
             std::exit(1);
         }
     }();
-    loop.shm = &shm;
+    loop->set_shm(&shm);
     shm.publish();
 
     struct sigaction sa{};
@@ -286,10 +295,9 @@ int main(int argc, char** argv) {
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    std::thread control([&loop] { loop.run(); });
-    while (!loop.setup_done.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    for (const std::string& p : loop.setup_problems) {
-        std::fprintf(stderr, "obot-rtd: warning: could not %s\n", p.c_str());
+    loop->run();  // returns once the thread has set itself up
+    for (const std::string& p : loop->setup_errors()) {
+        std::fprintf(stderr, "obot-rtd: warning: %s\n", p.c_str());
     }
     std::fprintf(stderr, "obot-rtd: %s running, %d us period, %zu joints, kernel %s, shm /dev/shm/%s\n",
                  config.name.c_str(), config.period_us, config.joints.size(),
@@ -300,7 +308,7 @@ int main(int argc, char** argv) {
     uint32_t last_mode = UINT32_MAX;
     uint32_t last_fault = 0;
     ipc::RobotState state{};
-    while (!g_stop.load()) {
+    while (!loop->finished()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         if (opt.duration_s > 0 &&
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() >= opt.duration_s) {
@@ -320,17 +328,17 @@ int main(int argc, char** argv) {
             last_fault = state.fault;
         }
     }
-    control.join();
+    loop->done();
     shm.unlink();
 
-    std::fprintf(stderr, "obot-rtd: wake latency %s\n", loop.latency.to_json().c_str());
-    std::fprintf(stderr, "obot-rtd: cycle time   %s\n", loop.exec.to_json().c_str());
+    std::fprintf(stderr, "obot-rtd: wake latency %s\n", loop->latency.to_json().c_str());
+    std::fprintf(stderr, "obot-rtd: cycle time   %s\n", loop->exec.to_json().c_str());
     if (!opt.stats_json.empty()) {
         std::ofstream f(opt.stats_json);
         f << "{\"period_us\": " << config.period_us
           << ", \"preempt_rt\": " << (rt::kernel_is_preempt_rt() ? "true" : "false")
-          << ", \"overruns\": " << state.overruns << ",\n \"wake_latency\": " << loop.latency.to_json()
-          << ",\n \"cycle_time\": " << loop.exec.to_json() << "}\n";
+          << ", \"overruns\": " << state.overruns << ",\n \"wake_latency\": " << loop->latency.to_json()
+          << ",\n \"cycle_time\": " << loop->exec.to_json() << "}\n";
     }
     return 0;
 }

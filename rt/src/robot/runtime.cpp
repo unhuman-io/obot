@@ -29,10 +29,7 @@ float measured_velocity(const J& j) {
 }
 }  // namespace
 
-Runtime::Runtime(const RobotConfig& config, actuator::Motors& motors) : config_(config), motors_(motors) {
-    if (motors_.size() != config_.joints.size()) {
-        throw std::invalid_argument("Runtime: one motor per configured joint is required");
-    }
+Runtime::Runtime(const RobotConfig& config) : config_(config) {
     joints_.reserve(config_.joints.size());
     for (const JointConfig& jc : config_.joints) {
         Joint j;
@@ -230,7 +227,8 @@ void Runtime::command_joint(Joint& j, size_t index, bool fresh, float dt) {
     j.sent = dc;
 }
 
-void Runtime::begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* command) {
+void Runtime::update(const CycleTiming& timing, const ipc::RobotCommand* command, const MotorIo& io,
+                     ipc::RobotState& out) {
     timing_ = timing;
     ++cycle_;
     warning_ = 0;
@@ -238,7 +236,27 @@ void Runtime::begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* co
         ++overruns_;
         warning_ |= ipc::robot_warning::kOverrun;
     }
+    take_statuses(io);
+    // Faults first: what is found in this cycle's statuses decides this cycle's commands.
+    evaluate();
+    command_motors(command, io);
+    publish(out);
+}
 
+void Runtime::take_statuses(const MotorIo& io) {
+    for (size_t i = 0; i < joints_.size(); ++i) {
+        Joint& j = joints_[i];
+        j.replied = io.fresh[i];
+        if (j.replied) {
+            j.driver.on_status(io.statuses[i], timing_.now_mono_ns);
+            j.ever_replied = true;
+        }
+        if (io.write_failed[i]) warning_ |= ipc::robot_warning::kTxDropped;
+    }
+}
+
+void Runtime::command_motors(const ipc::RobotCommand* command, const MotorIo& io) {
+    const CycleTiming& timing = timing_;
     if (command && (!seen_command_ || command->seq != seen_seq_)) {
         seen_command_ = true;
         seen_seq_ = command->seq;
@@ -288,31 +306,9 @@ void Runtime::begin_cycle(const CycleTiming& timing, const ipc::RobotCommand* co
             j.sent = actuator::DriveCommand{};  // idle; also what asks a drive for its first status
         }
         j.sent.clear_faults = clearing;
-        j.driver.fill(j.sent, static_cast<uint32_t>(cycle_), motors_.command(i));
-        j.replied = false;
-    }
-    motors_.write();
-    for (size_t i = 0; i < joints_.size(); ++i) {
-        if (motors_.tx_failed(i)) warning_ |= ipc::robot_warning::kTxDropped;
+        j.driver.fill(j.sent, static_cast<uint32_t>(cycle_), io.commands[i]);
     }
     if (clearing) --clear_burst_;
-    last_rx_ns_ = 0;
-}
-
-int Runtime::poll_rx(int64_t now_mono_ns) {
-    motors_.read();
-    int missing = 0;
-    for (size_t i = 0; i < joints_.size(); ++i) {
-        Joint& j = joints_[i];
-        if (motors_.fresh(i)) {
-            j.driver.on_status(motors_.status(i), now_mono_ns);
-            j.replied = true;
-            j.ever_replied = true;
-            last_rx_ns_ = std::max(last_rx_ns_, now_mono_ns);
-        }
-        missing += j.replied ? 0 : 1;
-    }
-    return missing;
 }
 
 void Runtime::update_odometry() {
@@ -346,7 +342,7 @@ void Runtime::update_odometry() {
     base_omega_ = (vr - vl) / base.track_width;
 }
 
-void Runtime::end_cycle(int64_t now_mono_ns, ipc::RobotState& out) {
+void Runtime::evaluate() {
     bool all_replied = true;
     bool any_drive_fault = false;
     for (Joint& j : joints_) {
@@ -389,7 +385,10 @@ void Runtime::end_cycle(int64_t now_mono_ns, ipc::RobotState& out) {
     }
 
     if (config_.base.present) update_odometry();
+}
 
+void Runtime::publish(ipc::RobotState& out) const {
+    const int64_t now_mono_ns = timing_.now_mono_ns;
     out = ipc::RobotState{};
     out.cycle = cycle_;
     out.t_mono_ns = timing_.now_mono_ns;
@@ -402,8 +401,8 @@ void Runtime::end_cycle(int64_t now_mono_ns, ipc::RobotState& out) {
     out.command_source = have_command_ ? command_.source : 0;
     out.command_age_us = command_age_us_;
     out.wake_latency_ns = timing_.wake_latency_ns;
-    out.exec_ns = static_cast<int32_t>(now_mono_ns - timing_.now_mono_ns);
-    out.rx_wait_ns = last_rx_ns_ ? static_cast<int32_t>(last_rx_ns_ - timing_.now_mono_ns) : -1;
+    out.exec_ns = timing_.exec_ns;
+    out.rx_wait_ns = timing_.rx_wait_ns;
     out.overruns = overruns_;
     out.odom_x = odom_x_;
     out.odom_y = odom_y_;
