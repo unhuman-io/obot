@@ -57,6 +57,28 @@
   .simcam canvas { display: block; width: 100%; height: 100%; }
   #model canvas { display: block; border-radius: 6px; }
   #banner { display: none; padding: 8px 16px; background: var(--bad); color: #fff; }
+  #plots { position: relative; }
+  .plot-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+  .plot-controls select, .plot-controls button { font: inherit; padding: 2px 8px; border-radius: 6px;
+                                                 border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .plot-picker { position: relative; }
+  .plot-picker summary { cursor: pointer; padding: 2px 10px; border: 1px solid var(--line); border-radius: 6px; list-style: none; }
+  .plot-picker summary::after { content: " ▾"; color: var(--muted); }
+  .plot-picker-list { position: absolute; z-index: 5; top: 100%; left: 0; margin-top: 4px; padding: 8px; width: max-content;
+                      max-width: min(90vw, 560px); max-height: 420px; overflow: auto; background: var(--panel);
+                      border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18);
+                      display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 10px; }
+  .plot-picker-list fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .plot-picker-list legend { color: var(--muted); font-size: 12px; padding: 0; margin-bottom: 2px; }
+  .plot-picker-list label { display: block; white-space: nowrap; }
+  .plot-panel { margin-top: 8px; }
+  .plot-legend { display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 12px; color: var(--muted); margin-left: 56px; }
+  .plot-legend b, .plot-tip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .plot-key i, .plot-tip i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+  .plot-canvas { display: block; width: 100%; height: 170px; cursor: crosshair; }
+  .plot-tip { display: none; position: absolute; z-index: 4; pointer-events: none; padding: 6px 8px; font-size: 12px;
+              background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+              white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -88,6 +110,10 @@
       </span></h2>
     <div id="model"></div>
     <p id="world-note" class="muted"></p>
+  </section>
+  <section>
+    <h2>Plots</h2>
+    <div id="plots"><p class="muted">Waiting for the robot.</p></div>
   </section>
   </div>
   <div class="side">
@@ -147,6 +173,7 @@ function showInfo(next) {
       .then((view) => { window.obotModel = view; })
       .catch((e) => { $("model").textContent = "3D view unavailable: " + e; });
   }
+  if (window.obotPlots) window.obotPlots.setCatalogue(info.plot_signals || [], info.plot_rates || []);
   const cams = $("cameras");
   const simCameras = info.sim_cameras || [];
   if (info.cameras.length || simCameras.length) {
@@ -238,11 +265,12 @@ function showState(s) {
 
 function connect() {
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" + query);
-  ws.onopen = () => { wsOpenSince = Date.now(); };
+  ws.onopen = () => { wsOpenSince = Date.now(); if (window.obotPlots) window.obotPlots.resubscribe(); };
   ws.onmessage = (event) => {
     const message = JSON.parse(event.data);
     if (message.type === "info") showInfo(message);
     else if (message.type === "state") showState(message);
+    else if (message.type === "plot" && window.obotPlots) window.obotPlots.addBatch(message);
   };
   ws.onclose = () => {
     $("banner").style.display = "block";
@@ -314,6 +342,11 @@ setInterval(() => {
   if (state) { send({ type: "gamepad", ...state }); sentNeutral = false; }
   else if (!sentNeutral) { send({ type: "gamepad", axes: [0, 0, 0, 0], buttons: [] }); sentNeutral = true; }
 }, 25);
+
+import("/static/plots.js").then((m) => {
+  window.obotPlots = m.createPlots($("plots"), send);
+  if (info.plot_signals) window.obotPlots.setCatalogue(info.plot_signals, info.plot_rates || []);
+}).catch((e) => { $("plots").textContent = "Plots unavailable: " + e; });
 
 connect();
 </script>

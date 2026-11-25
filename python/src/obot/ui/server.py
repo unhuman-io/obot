@@ -27,13 +27,14 @@ from aiohttp import WSMsgType, web
 from ..client import NotRunning, Request, Robot, describe
 from ..config import ToolsConfig
 from ..teleop.mapper import GamepadState, InputWatch, TeleopMapper, button_request
-from . import model
+from . import model, plots
 
 STATIC = Path(__file__).parent / "static"
 GAMEPAD_TIMEOUT_S = 0.3  # a silent operator is treated as having let go of everything
 RELEASE_S = 1.0  # an operator who touches nothing for this long gives up control
 TICK_HZ = 50
 STATE_HZ = 15
+PLOT_BATCH_HZ = 10
 _REQUESTS = {
     "enable": Request.ENABLE,
     "disable": Request.DISABLE,
@@ -52,6 +53,8 @@ class Operator:
         self.stamp = 0.0
         self.engaged_at = 0.0
         self._watch = InputWatch(controller_timeout_s)
+        self.plot_signals: list[str] = []  # what this page plots, and at what rate
+        self.plot_rate = 100
 
     def update(self, pad: GamepadState) -> Request:
         """Take new input. Returns the request a newly pressed button stands for."""
@@ -88,6 +91,7 @@ class UiServer:
         self.mapper: TeleopMapper | None = None
         self.cameras: dict = {}
         self.world = None  # the 3D map of the surroundings, if there is a depth camera
+        self._plot_t0: int | None = None
         self.sockets: dict[web.WebSocketResponse, Operator] = {}
         self.local: Operator | None = None
         self.joystick = None
@@ -144,6 +148,8 @@ class UiServer:
             ],
             "model": bool(self.config.urdf and os.path.isfile(self.config.urdf)),
             "world": self.world.frustums() if self.world else None,
+            "plot_signals": plots.signals(info.joint_names) if info else [],
+            "plot_rates": [r for r in plots.RATES if info and r <= round(1 / info.period_s)],
         }
 
     async def _info(self, request: web.Request) -> web.Response:
@@ -194,6 +200,13 @@ class UiServer:
                     self._queue(operator.update(pad))
                 elif data.get("type") == "request" and data.get("request") in _REQUESTS:
                     self._queue(_REQUESTS[data["request"]])
+                elif data.get("type") == "plot":
+                    joints = len(self.robot.info.joint_names) if self.robot else 0
+                    wanted = data.get("signals") if isinstance(data.get("signals"), list) else []
+                    operator.plot_signals = [s for s in wanted if isinstance(s, str) and plots.valid(s, joints)
+                                             ][:plots.MAX_SIGNALS]
+                    if data.get("rate") in plots.RATES:
+                        operator.plot_rate = data["rate"]
                 elif data.get("type") == "world" and self.world is not None:
                     if data.get("action") == "clear":
                         self.world.clear()
@@ -326,6 +339,23 @@ class UiServer:
             with contextlib.suppress(ConnectionError, RuntimeError):
                 await ws.send_str(text)
 
+    async def _send_plots(self) -> None:
+        """Each page's chosen signals from the state records published since the last batch."""
+        plotting = [(ws, o) for ws, o in self.sockets.items() if o.plot_signals]
+        records = self.robot.read()   # also when nobody plots: a plot starts with now, not with old data
+        if not plotting or not len(records):
+            return
+        loop_hz = 1 / self.robot.info.period_s
+        joints = len(self.robot.info.joint_names)
+        if self._plot_t0 is None:
+            self._plot_t0 = int(records["t_mono_ns"][0])
+        for ws, operator in plotting:
+            stride = max(1, round(loop_hz / operator.plot_rate))
+            message = plots.batch(records, operator.plot_signals, stride, joints, self._plot_t0)
+            if message is not None:
+                with contextlib.suppress(ConnectionError, RuntimeError):
+                    await ws.send_str(json.dumps(message))
+
     async def _loop(self) -> None:
         dt = 1.0 / TICK_HZ
         tick = 0
@@ -365,6 +395,9 @@ class UiServer:
                 self.robot.send(out.command, request)
             self.status.update(operator=operator.label if operator else None, group=out.group, moving=out.moving,
                                cartesian=out.cartesian)
+
+            if tick % (TICK_HZ // PLOT_BATCH_HZ) == 0:
+                await self._send_plots()
 
             if tick % (TICK_HZ // STATE_HZ) == 0 and state is not None:
                 cameras = {name: {"age": None if c.age == float("inf") else round(c.age, 2), "error": c.error,

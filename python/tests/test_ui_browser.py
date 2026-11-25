@@ -91,6 +91,24 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
         # The way driven is drawn, and the map has grown with it.
         await page.wait_for_function("window.obotModel.world.trail > 3", timeout=5000)
 
+        # Plots: chosen signals arrive at the loop's rate and are drawn one panel per unit.
+        await page.wait_for_function("window.obotPlots && document.querySelectorAll('.plot-picker input').length > 20")
+        await page.evaluate("['qd/4', 'qd_cmd/4', 'base_v'].forEach((id) => window.obotPlots.select(id))")
+        await page.wait_for_function("window.obotPlots.samples('qd/4') > 50", timeout=5000)
+        assert await page.evaluate("window.obotPlots.panels") == 2            # rad/s and m/s
+        assert await page.locator(".plot-canvas").count() == 2
+        assert await page.evaluate("window.obotPlots.last('base_v')") > 0.2   # it is driving
+        assert "left_wheel_joint velocity" in await page.text_content(".plot-legend")
+        # Pointing at a plot reads off every line at that instant.
+        await page.locator(".plot-canvas").first.scroll_into_view_if_needed()
+        box = await page.locator(".plot-canvas").first.bounding_box()
+        await page.mouse.move(box["x"] + box["width"] * 0.8, box["y"] + 60)
+        await page.wait_for_function("getComputedStyle(document.querySelector('.plot-tip')).display === 'block'")
+        assert "left_wheel_joint velocity" in await page.text_content(".plot-tip")
+        await page.mouse.move(5, 5)
+        await page.evaluate("window.obotPlots.select('base_v', false)")
+        assert await page.evaluate("window.obotPlots.panels") == 1
+
         # Letting go stops the robot.
         await page.keyboard.up("ShiftLeft")
         await page.keyboard.up("KeyW")

@@ -358,3 +358,73 @@ def test_realsense_video_devices_are_found_by_what_they_are(tmp_path, monkeypatc
         assert opened[0] == "/dev/found-depth-222"
     finally:
         camera.stop()
+
+
+async def test_plot_signals_are_streamed_from_the_state_history(robot, daemon):
+    async with TestClient(TestServer(make_server(daemon).app())) as client:
+        ws = await client.ws_connect("/ws")
+        while True:   # the first info can come before the server has found the robot
+            info = json.loads((await ws.receive()).data)
+            if info["type"] == "info" and info["plot_signals"]:
+                break
+        by_id = {s["id"]: s for s in info["plot_signals"]}
+        assert by_id["q/0"] == {"id": "q/0", "label": "shoulder_pitch_joint position", "unit": "rad",
+                                "group": "shoulder_pitch_joint"}
+        assert by_id["bus_voltage/5"]["unit"] == "V" and by_id["base_v"]["group"] == "robot"
+        assert info["plot_rates"] == [50, 100, 250, 500, 1000]
+
+        async def batches(count):
+            out = []
+            while len(out) < count:
+                message = json.loads((await asyncio.wait_for(ws.receive(), 5)).data)
+                if message["type"] == "plot":
+                    out.append(message)
+            return out
+
+        # Nothing is sent until something is asked for; unknown names are left out.
+        await ws.send_json({"type": "plot", "signals": ["q/0", "bus_voltage/5", "wake_latency_ns", "nope", "q/99"],
+                            "rate": 250})
+        got = await batches(4)
+        assert set(got[-1]["y"]) == {"q/0", "bus_voltage/5", "wake_latency_ns"}
+        t = [x for message in got[1:] for x in message["t"]]
+        steps = [b - a for a, b in zip(t, t[1:], strict=False)]
+        assert len(t) > 40 and min(steps) > 0
+        assert sorted(steps)[len(steps) // 2] == pytest.approx(0.004, abs=0.0002)     # every 4th cycle of 1 kHz
+        assert got[-1]["y"]["bus_voltage/5"][0] == pytest.approx(48.0)                # or None before it was reported
+        assert all(len(v) == len(got[-1]["t"]) for v in got[-1]["y"].values())
+
+        # A slower rate, and then nothing.
+        await ws.send_json({"type": "plot", "signals": ["q/0"], "rate": 50})
+        await batches(2)
+        slow = (await batches(1))[0]
+        assert set(slow["y"]) == {"q/0"}
+        assert slow["t"][1] - slow["t"][0] == pytest.approx(0.02, abs=0.001)
+        await ws.send_json({"type": "plot", "signals": []})
+        await asyncio.sleep(0.3)
+        end = asyncio.get_running_loop().time() + 1.0
+        seen = set()
+        while asyncio.get_running_loop().time() < end:
+            seen.add(json.loads((await asyncio.wait_for(ws.receive(), 5)).data)["type"])
+        assert "state" in seen and "plot" not in seen
+
+
+def test_plot_batch_replaces_missing_values():
+    import numpy as np
+
+    from obot import layout
+    from obot.ui import plots
+
+    records = np.zeros(6, layout.STATE)
+    records["cycle"] = np.arange(10, 16)
+    records["t_mono_ns"] = np.arange(6) * 1_000_000 + 5_000_000_000
+    records["q"][:, 1] = np.linspace(0, 0.5, 6)
+    records["temperature"][:, 1] = np.nan
+    records["exec_ns"] = 250_000
+    message = plots.batch(records, ["q/1", "temperature/1", "exec_ns", "bogus"], 2, 2, 5_000_000_000)
+    assert message["t"] == [0.0, 0.002, 0.004]
+    assert message["y"]["q/1"] == pytest.approx([0.0, 0.2, 0.4])
+    assert message["y"]["temperature/1"] == [None, None, None]        # JSON has no NaN
+    assert message["y"]["exec_ns"] == [250.0, 250.0, 250.0]           # shown in microseconds
+    assert "bogus" not in message["y"]
+    assert plots.batch(records[:0], ["q/1"], 1, 2, 0) is None
+    assert not plots.valid("q/2", 2) and plots.valid("q/1", 2) and plots.valid("base_v", 2) and not plots.valid("q", 2)

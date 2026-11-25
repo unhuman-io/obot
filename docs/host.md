@@ -219,6 +219,16 @@ is not (there is none for the Jetson Nano's Ubuntu 18.04) they use the video dev
 kernel makes of the camera, which needs nothing from Intel, only `v4l2-ctl`
 (`sudo apt install v4l-utils`). Depth is shown in false colour, near = warm.
 
+### Plots
+
+The **Plots** section draws any of the robot's signals against time: per joint position,
+velocity and torque with their commands, temperature, bus voltage and status age, and for
+the robot base speed, odometry and the control loop's own timing. Choose up to eight under
+*Signals*; signals with the same unit share a panel, and pointing at a plot reads off all
+of them at that instant. The samples come from the daemon's state history, one per control
+cycle, at the chosen rate (up to the loop's 1 kHz), not from the page's slower status
+updates.
+
 ### The 3D view: the robot and what it has seen
 
 With a depth camera the page also draws a map of the surroundings around the robot: every
