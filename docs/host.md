@@ -183,11 +183,11 @@ height = 480
 fps = 15
 ```
 
-A depth camera (Intel RealSense D435) is two entries, colour and depth. On the Jetson
-kernels it appears as ordinary video devices and needs nothing from Intel
-(`v4l2:` for colour, `v4l2depth:` for depth; `sudo apt install v4l-utils`); elsewhere
-`realsense:color` and `realsense:depth` read it through `pyrealsense2`. Depth is shown in
-false colour, near = warm.
+A depth camera (Intel RealSense D435) is two entries, `realsense:color` and
+`realsense:depth`. They read it through `pyrealsense2` where that is installed. Where it
+is not (there is none for the Jetson Nano's Ubuntu 18.04) they use the video devices the
+kernel makes of the camera, which needs nothing from Intel, only `v4l2-ctl`
+(`sudo apt install v4l-utils`). Depth is shown in false colour, near = warm.
 
 ### The 3D view: the robot and what it has seen
 
@@ -202,13 +202,13 @@ For that the configuration has to say where each camera is:
 ```toml
 [[camera]]
 name = "d435"
-source = "v4l2:/dev/video3"
+source = "realsense:color"
 xyz = [0.10, 0.015, 0.40]       # m, in the base: x forward, y left, z up from the floor
 rpy = [0.0, 0.6, 0.0]           # rad; rpy[1] > 0 looks down
 
 [[camera]]
 name = "d435_depth"
-source = "v4l2depth:/dev/video1"
+source = "realsense:depth"
 xyz = [0.10, 0.0, 0.40]
 rpy = [0.0, 0.6, 0.0]
 color = "d435"                  # the camera whose picture colours the points

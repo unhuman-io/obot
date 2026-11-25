@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import pytest
 
@@ -291,3 +292,69 @@ def test_depth_pictures_are_coloured_by_distance():
     assert image[0, 1, 2] > 150 and image[0, 1, 0] < 80                               # near: red (BGR)
     assert image[0, 3, 0] > 100 and image[0, 3, 2] < 100                              # far: blue
     assert (depth_to_image(depth.astype(np.float32) / 1000)[0, :4] == image[0, :4]).all()
+
+
+def test_realsense_video_devices_are_found_by_what_they_are(tmp_path, monkeypatch):
+    from obot.ui import cameras
+
+    def device(number, name, index, interface, serial):
+        usb = tmp_path / f"usb-{serial}"
+        entry = tmp_path / "v4l" / f"video{number}"
+        (usb / f"if{interface}").mkdir(parents=True, exist_ok=True)
+        entry.mkdir(parents=True)
+        (usb / "serial").write_text(serial + "\n")
+        (usb / f"if{interface}" / "bInterfaceNumber").write_text(interface + "\n")
+        (entry / "name").write_text(name + "\n")
+        (entry / "index").write_text(f"{index}\n")
+        (entry / "device").symlink_to(usb / f"if{interface}")
+
+    sysfs = str(tmp_path / "v4l")
+    device(0, "vi-output, imx219 7-0010", 0, "", "csi")
+    with pytest.raises(OSError, match="no RealSense found"):
+        cameras.find_realsense_video("depth", sysfs=sysfs)
+    # As a Jetson Nano shows a D435 after it was plugged in again: colour is video4 now.
+    device(1, "Intel(R) RealSense(TM) Depth Ca", 0, "00", "111")
+    device(2, "Intel(R) RealSense(TM) Depth Ca", 1, "00", "111")
+    device(4, "Intel(R) RealSense(TM) Depth Ca", 0, "03", "111")
+    device(10, "Intel(R) RealSense(TM) Depth Ca", 0, "00", "222")
+    device(12, "Intel(R) RealSense(TM) Depth Ca", 0, "03", "222")
+    assert cameras.find_realsense_video("depth", sysfs=sysfs) == "/dev/video1"
+    assert cameras.find_realsense_video("color", sysfs=sysfs) == "/dev/video4"
+    assert cameras.find_realsense_video("color", "222", sysfs=sysfs) == "/dev/video12"
+    assert cameras.find_realsense_video("depth", "222", sysfs=sysfs) == "/dev/video10"
+    with pytest.raises(OSError, match="333"):
+        cameras.find_realsense_video("depth", "333", sysfs=sysfs)
+
+    # A realsense: camera uses them when librealsense is not installed.
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_librealsense(name, *args, **kwargs):
+        if name == "pyrealsense2":
+            raise ImportError("no pyrealsense2 here")
+        return real_import(name, *args, **kwargs)
+
+    opened = []
+
+    class FakeRaw:
+        def __init__(self, device, width, height, fps):
+            opened.append(device)
+
+        def read(self):
+            raise OSError("stop here")
+
+        def release(self): ...
+
+    monkeypatch.setattr(builtins, "__import__", no_librealsense)
+    monkeypatch.setattr(cameras, "_V4l2Raw", FakeRaw)
+    monkeypatch.setattr(cameras, "find_realsense_video", lambda stream, serial="": f"/dev/found-{stream}-{serial}")
+    camera = cameras.Camera(CameraConfig(name="d", source="realsense:222:depth"))
+    try:
+        for _ in range(100):
+            if opened:
+                break
+            time.sleep(0.02)
+        assert opened[0] == "/dev/found-depth-222"
+    finally:
+        camera.stop()

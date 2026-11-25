@@ -17,10 +17,13 @@ Sources:
     scene:depth                 a small made-up room (floor, boxes, a wall) seen from where
     scene:color                 the camera is mounted, drawn here: for trying the 3D world
                                 view without a depth camera
-    realsense:color             an Intel RealSense (D435, ...) through librealsense
-    realsense:depth             (pip install pyrealsense2): the colour image, or the depth
-    realsense:<serial>:depth    image drawn in false colour, near = warm. Add the serial
-                                number when more than one camera is connected.
+    realsense:color             an Intel RealSense (D435, ...): the colour image, or the depth
+    realsense:depth             image drawn in false colour, near = warm. Add the serial
+    realsense:<serial>:depth    number when more than one camera is connected. Read through
+                                librealsense where it is installed (pip install
+                                pyrealsense2), otherwise through the kernel's video devices
+                                as with v4l2: and v4l2depth:, found by what they are, so
+                                their numbers do not have to be known.
     gst:<pipeline>              a GStreamer pipeline that ends in a JPEG encoder, run with
                                 gst-launch-1.0. A CSI camera on a Jetson Nano:
                                 gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,
@@ -108,6 +111,32 @@ def depth_mm_to_image(depth_mm: np.ndarray, max_depth_m: float = 4.0) -> np.ndar
 def depth_to_image(depth_m: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
     """The same for depth in metres."""
     return depth_mm_to_image(np.clip(depth_m * 1000, 0, 65535).astype(np.uint16), max_depth_m)
+
+
+def find_realsense_video(stream: str, serial: str = "", sysfs: str = "/sys/class/video4linux") -> str:
+    """The video device the kernel made for a RealSense's "depth" or "color" stream (of the
+    camera with that serial number, if given). The camera is several USB interfaces: depth
+    is the first video device of interface 0, colour that of interface 3."""
+    import glob
+    import os
+
+    def read(path: str) -> str:
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    interface = "03" if stream == "color" else "00"
+    entries = glob.glob(os.path.join(sysfs, "video*"))
+    for entry in sorted(entries, key=lambda e: int(os.path.basename(e)[5:] or 0)):
+        usb_interface = os.path.join(entry, "device")
+        if ("RealSense" in read(os.path.join(entry, "name")) and read(os.path.join(entry, "index")) == "0"
+                and read(os.path.join(usb_interface, "bInterfaceNumber")) == interface
+                and (not serial or read(os.path.join(usb_interface, "..", "serial")) == serial)):
+            return "/dev/" + os.path.basename(entry)
+    which = f" with serial number {serial}" if serial else ""
+    raise OSError(f"no RealSense{which} found (no {stream} video device, and pyrealsense2 is not installed)")
 
 
 class _GstJpeg:
@@ -223,6 +252,7 @@ class Camera:
         self._raw_stamp = 0.0
         self.fps = 0.0  # measured
         self.error: str | None = None
+        self._kind = config.source.partition(":")[0]
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"camera-{config.name}", daemon=True)
         self._thread.start()
@@ -250,10 +280,22 @@ class Camera:
     def _open(self):
         cv2 = self._cv2
         c = self.config
-        if c.source == "test" or c.source.startswith(("realsense", "scene:")):
+        self._kind, _, device = c.source.partition(":")
+        if self._kind == "realsense":
+            try:
+                import pyrealsense2  # noqa: F401
+            except ImportError:
+                # No librealsense here (there is none for the Jetson Nano's Ubuntu 18.04):
+                # read the video devices the kernel makes of the camera instead. Looked up
+                # every time the camera is opened, because their numbers change when it is
+                # plugged in again.
+                parts = device.split(":")
+                device = find_realsense_video("depth" if c.is_depth else "color", parts[0] if len(parts) > 1 else "")
+                self._kind = "v4l2depth" if c.is_depth else "v4l2"
+        if self._kind in ("test", "realsense", "scene"):
             return None
-        if c.source.startswith("v4l2:"):
-            cap = cv2.VideoCapture(c.source[5:], cv2.CAP_V4L2)
+        if self._kind == "v4l2":
+            cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
             # MJPG where the camera has it (more frames over USB 2); cameras without it,
             # like the D435's colour device, keep their own format.
             cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
@@ -261,14 +303,14 @@ class Camera:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, c.height)
             cap.set(cv2.CAP_PROP_FPS, c.fps)
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        elif c.source.startswith("gst:"):
-            return _GstJpeg(c.source[4:])
-        elif c.source.startswith("v4l2depth:"):
-            return _V4l2Raw(c.source[10:], c.width, c.height, c.fps)
+        elif self._kind == "gst":
+            return _GstJpeg(device)
+        elif self._kind == "v4l2depth":
+            return _V4l2Raw(device, c.width, c.height, c.fps)
         else:
             raise ValueError(f"camera {c.name}: unknown source '{c.source}'")
         if not cap.isOpened():
-            raise OSError(f"camera {c.name}: cannot open {c.source}")
+            raise OSError(f"camera {c.name}: cannot open {device}")
         return cap
 
     def _test_frame(self, t: float) -> np.ndarray:
@@ -293,21 +335,25 @@ class Camera:
 
     def _read(self, cap, start: float):
         """One frame: (JPEG bytes or None, picture to encode or None, raw picture or None,
-        arrival time)."""
+        arrival time), or None for a frame that is not to be shown."""
         c = self.config
-        if c.source == "test":
+        if self._kind == "test":
             return None, self._test_frame(start), None, start
-        if c.source.startswith("gst:"):
+        if self._kind == "gst":
             return cap.read_jpeg(), None, None, time.monotonic()   # already encoded
-        if c.source.startswith("v4l2depth:"):
+        if self._kind == "v4l2depth":
             stamp, depth = cap.read()
+            # Some cameras send more frames than they were asked for (a D435 on USB 2 sends
+            # 30 per second whatever is set): drawing those would only cost time.
+            if stamp - self._raw_stamp < 0.7 / max(1, c.fps):
+                return None
             return None, depth_mm_to_image(depth), depth, stamp
-        if c.source.startswith("scene:"):
+        if self._kind == "scene":
             from . import scene
 
             depth, colour = scene.render(self._scene_pose(), c.intrinsics())
             return (None, depth_mm_to_image(depth), depth, start) if c.is_depth else (None, colour, colour, start)
-        if c.source.startswith("realsense"):
+        if self._kind == "realsense":
             parts = c.source.split(":")[1:]
             serial = parts[0] if parts and parts[0] not in ("color", "depth") else ""
             data = _RealSense.get(serial, c.width, c.height, c.fps).read("depth" if c.is_depth else "color")
@@ -333,7 +379,10 @@ class Camera:
                     cap = self._open()
                     self.error = None
                 start = time.monotonic()
-                jpeg, frame, raw, stamp = self._read(cap, start)
+                picture = self._read(cap, start)
+                if picture is None:
+                    continue
+                jpeg, frame, raw, stamp = picture
                 if jpeg is None:
                     ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, c.quality])
                     jpeg = encoded.tobytes() if ok else None

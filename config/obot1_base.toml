@@ -67,9 +67,8 @@ name = "front"
 source = "gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=15/1 ! nvjpegenc"
 fps = 15
 
-# An Intel RealSense D435 on a USB 3 port. The L4T kernel presents it as three video
-# devices (depth, infrared, colour); their numbers follow the order cameras were found in,
-# so check with `v4l2-ctl --list-devices` after changing what is plugged in.
+# An Intel RealSense D435. On the Jetson Nano there is no librealsense; the kernel presents
+# the camera as video devices, and realsense: finds the right ones whatever their numbers.
 #
 # xyz and rpy say where the camera is on the base (x forward, y left, z up from the floor;
 # rpy[1] > 0 looks down). The 3D view on the operator page places what the depth camera
@@ -78,7 +77,7 @@ fps = 15
 
 [[camera]]
 name = "d435"
-source = "v4l2:/dev/video3"
+source = "realsense:color"
 width = 640
 height = 480
 fps = 15
@@ -87,7 +86,7 @@ rpy = [0.0, 0.6, 0.0]
 
 [[camera]]
 name = "d435_depth"
-source = "v4l2depth:/dev/video1"
+source = "realsense:depth"
 width = 640
 height = 480
 fps = 15

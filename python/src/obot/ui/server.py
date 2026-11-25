@@ -342,8 +342,9 @@ class UiServer:
                 if tick % TICK_HZ == 1:
                     self._connect()
                 if self.robot is None:
-                    if tick % (TICK_HZ // 2) == 0:
-                        await self._broadcast({"type": "state", "status": self.status})
+                    if tick % (TICK_HZ // 2) == 0:   # cameras and the map work without the daemon
+                        await self._broadcast({"type": "state", "status": self.status,
+                                               "world": self.world.describe() if self.world else None})
                     self.pending_requests.clear()
                     continue
             if not told_clients:
