@@ -147,6 +147,10 @@ class RobotThread : public MotorThread {
     // After the drives have been sent idle commands for a few cycles following g_stop.
     bool finished() const { return finished_.load(); }
     uint32_t loop_overruns() const { return overruns(); }
+    // The joint whose motor can no longer be read or written at all, or -1. A board that
+    // restarted or was unplugged is a new device to the OS: what this process has open
+    // stays dead, and only opening the motors again helps.
+    int lost_motor() const { return lost_motor_.load(); }
 
     rt::Histogram latency;
     rt::Histogram exec;
@@ -182,6 +186,18 @@ class RobotThread : public MotorThread {
         latency.add(wake_latency_ns_);
 
         if (shutdown_cycles_ > 0 && --shutdown_cycles_ == 0) finished_.store(true);
+
+        // Errors from the OS on every read or write for a second: the motor is gone, not
+        // merely late. (A motor that is only silent has no such errors and stays the
+        // control cycle's business, as a comm timeout.)
+        const int lost_after = 1'000'000 / config_.period_us;
+        for (int i = 0; i < motor_manager_.size(); ++i) {
+            if (motor_manager_.get_read_error_count()[i] > lost_after ||
+                motor_manager_.get_write_error_count()[i] > lost_after) {
+                lost_motor_.store(i);
+                finished_.store(true);
+            }
+        }
     }
 
     // After the commands have gone out.
@@ -206,6 +222,7 @@ class RobotThread : public MotorThread {
     int shutdown_cycles_ = -1;
     int32_t last_exec_ns_ = 0;
     std::atomic<bool> finished_{false};
+    std::atomic<int> lost_motor_{-1};
 };
 
 }  // namespace
@@ -330,6 +347,13 @@ int main(int argc, char** argv) {
     }
     loop->done();
     shm.unlink();
+    if (loop->lost_motor() >= 0) {
+        // Exit with an error: the service manager starts the daemon again, which opens
+        // the motors anew (and keeps trying until they are all there).
+        std::fprintf(stderr, "obot-rtd: lost the motor of %s (restarted or unplugged?): exiting to open it again\n",
+                     config.joints[static_cast<size_t>(loop->lost_motor())].name.c_str());
+        return 1;
+    }
 
     std::fprintf(stderr, "obot-rtd: wake latency %s\n", loop->latency.to_json().c_str());
     std::fprintf(stderr, "obot-rtd: cycle time   %s\n", loop->exec.to_json().c_str());

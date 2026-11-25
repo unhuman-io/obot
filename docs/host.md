@@ -123,6 +123,8 @@ is not fresh and faults the robot after `comm_timeout_cycles`. Things to know:
 
 - All motors have to be there when the daemon starts; it exits with a message naming the
   missing one, and systemd starts it again.
+- A board that restarts or is unplugged while the daemon runs is a new device to the OS.
+  After a second of errors on it the daemon exits, and the restart opens it again.
 - USB boards need the `usb_rt` kernel driver 0.8.0 or newer. In 0.7.1, a board that loses
   power while in use leaves the reading thread deadlocked in the kernel, and the daemon
   can then not be stopped without a reboot. `deploy.sh` checks the version.
