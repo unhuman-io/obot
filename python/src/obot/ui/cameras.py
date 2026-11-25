@@ -1,5 +1,7 @@
 """Camera capture for the operator UI: each camera runs in its own thread and keeps only
-its newest frame as a JPEG, so a slow viewer never builds up a queue.
+its newest frame as a JPEG, so a slow viewer never builds up a queue. Depth and colour
+cameras also keep the newest picture itself (Camera.raw), which the 3D world view is built
+from.
 
 Sources:
     test                        a moving test pattern (no hardware)
@@ -12,6 +14,9 @@ Sources:
                                 kernels that know its formats (the Jetson L4T kernels do):
                                 depth, infrared and colour as separate video devices, with
                                 nothing from Intel to install. Needs v4l2-ctl (v4l-utils).
+    scene:depth                 a small made-up room (floor, boxes, a wall) seen from where
+    scene:color                 the camera is mounted, drawn here: for trying the 3D world
+                                view without a depth camera
     realsense:color             an Intel RealSense (D435, ...) through librealsense
     realsense:depth             (pip install pyrealsense2): the colour image, or the depth
     realsense:<serial>:depth    image drawn in false colour, near = warm. Add the serial
@@ -73,14 +78,28 @@ class _RealSense:
         return np.clip(depth, 0, max_depth_m)
 
 
-def depth_to_image(depth_m: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
-    """Depth in metres as a false colour picture: near is warm, far is cool, no reading is black."""
-    import cv2
+_depth_colours: dict[float, np.ndarray] = {}
 
-    near = (255 * (1.0 - np.clip(depth_m / max_depth_m, 0, 1))).astype(np.uint8)
-    image = cv2.applyColorMap(near, cv2.COLORMAP_TURBO)
-    image[depth_m <= 0] = 0
-    return image
+
+def depth_mm_to_image(depth_mm: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
+    """Depth in millimetres as a false colour picture: near is warm, far is cool, no reading
+    (0, or the top of the sensor's range) is black."""
+    table = _depth_colours.get(max_depth_m)
+    if table is None:
+        import cv2
+
+        mm = np.arange(65536, dtype=np.float32)
+        near = (255 * (1.0 - np.clip(mm / (max_depth_m * 1000), 0, 1))).astype(np.uint8)
+        table = cv2.applyColorMap(near.reshape(-1, 1), cv2.COLORMAP_TURBO).reshape(-1, 3)
+        table[0] = 0
+        table[65000:] = 0
+        _depth_colours[max_depth_m] = table
+    return table[depth_mm]
+
+
+def depth_to_image(depth_m: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
+    """The same for depth in metres."""
+    return depth_mm_to_image(np.clip(depth_m * 1000, 0, 65535).astype(np.uint16), max_depth_m)
 
 
 class _GstJpeg:
@@ -115,31 +134,61 @@ class _GstJpeg:
 
 
 class _V4l2Raw:
-    """Raw frames of a fixed size from v4l2-ctl streaming to its standard output."""
+    """16 bit frames from v4l2-ctl streaming to its standard output.
 
-    def __init__(self, device: str, width: int, height: int, fps: int, pixelformat: str, bytes_per_pixel: int):
+    A thread takes every frame off the pipe as it arrives and keeps the newest. Reading
+    them one by one at the pace of whoever draws them would leave the picture several
+    frames behind as soon as drawing is slower than the camera: the frames in between wait
+    in the driver's buffers and the pipe.
+    """
+
+    def __init__(self, device: str, width: int, height: int, fps: int, pixelformat: str = "Z16 "):
+        import shutil
         import subprocess
 
         self._shape = (height, width)
-        self._size = width * height * bytes_per_pixel
+        self._size = width * height * 2
+        # Without stdbuf the end of each frame can sit in v4l2-ctl's output buffer until
+        # the next frame pushes it out.
+        unbuffered = ["stdbuf", "-o0"] if shutil.which("stdbuf") else []
         self._process = subprocess.Popen(
-            ["v4l2-ctl", "-d", device, f"--set-fmt-video=width={width},height={height},pixelformat={pixelformat}",
+            [*unbuffered, "v4l2-ctl", "-d", device,
+             f"--set-fmt-video=width={width},height={height},pixelformat={pixelformat}",
              f"--set-parm={fps}", "--stream-mmap", "--stream-to=-"],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
+        self._ready = threading.Condition()
+        self._frame: np.ndarray | None = None
+        self._stamp = 0.0
+        self._count = 0
+        self._taken = 0
+        self._ended = False
+        threading.Thread(target=self._drain, name=f"v4l2-{device}", daemon=True).start()
 
-    def read_depth_m(self) -> np.ndarray:
-        """The next frame as depth in metres; 0 where the camera has no reading."""
-        data = b""
-        while len(data) < self._size:
-            chunk = self._process.stdout.read(self._size - len(data))
-            if not chunk:
-                raise OSError("v4l2-ctl ended")
-            data += chunk
-        raw = np.frombuffer(data, dtype="<u2").reshape(self._shape)
-        depth = raw.astype(np.float32) * 0.001
-        depth[raw >= 65000] = 0    # the sensor's "no reading" at the top of its range
-        return depth
+    def _drain(self) -> None:
+        stream = self._process.stdout
+        while True:
+            data = stream.read(self._size)
+            with self._ready:
+                if len(data) < self._size:
+                    self._ended = True
+                else:
+                    self._frame = np.frombuffer(data, dtype="<u2").reshape(self._shape)
+                    self._stamp = time.monotonic()
+                    self._count += 1
+                self._ready.notify_all()
+            if len(data) < self._size:
+                return
+
+    def read(self, timeout: float = 3.0) -> tuple[float, np.ndarray]:
+        """(arrival time, newest frame), waiting for one that was not handed out before."""
+        with self._ready:
+            if not self._ready.wait_for(lambda: self._ended or self._count != self._taken, timeout):
+                raise OSError("no frame from v4l2-ctl")
+            if self._count == self._taken:
+                raise OSError("v4l2-ctl ended (is the device in use, or v4l-utils missing?)")
+            self._taken = self._count
+            return self._stamp, self._frame
 
     def release(self) -> None:
         self._process.kill()
@@ -147,16 +196,22 @@ class _V4l2Raw:
 
 
 class Camera:
-    def __init__(self, config: CameraConfig):
+    def __init__(self, config: CameraConfig, pose=None):
         import cv2  # imported here so the rest of the package works without OpenCV
 
         self._cv2 = cv2
         self.config = config
         self.name = config.name
+        # For scene: sources: a function returning where the camera's optical frame is in
+        # the world (4 x 4). The 3D world view sets it; without it the base is at the origin.
+        self.pose = pose
         self._lock = threading.Lock()
         self._jpeg: bytes | None = None
         self._sequence = 0
         self._stamp = 0.0
+        self._raw: np.ndarray | None = None
+        self._raw_stamp = 0.0
+        self.fps = 0.0  # measured
         self.error: str | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"camera-{config.name}", daemon=True)
@@ -171,6 +226,13 @@ class Camera:
         with self._lock:
             return self._sequence, self._jpeg
 
+    def raw(self) -> tuple[float, np.ndarray | None]:
+        """(time it arrived, newest picture): depth in millimetres (uint16) from a depth
+        camera, BGR from a colour camera, None from sources that only deliver JPEG. The
+        array is not to be written to."""
+        with self._lock:
+            return self._raw_stamp, self._raw
+
     @property
     def age(self) -> float:
         return time.monotonic() - self._stamp if self._stamp else float("inf")
@@ -178,7 +240,7 @@ class Camera:
     def _open(self):
         cv2 = self._cv2
         c = self.config
-        if c.source == "test" or c.source.startswith("realsense"):
+        if c.source == "test" or c.source.startswith(("realsense", "scene:")):
             return None
         if c.source.startswith("v4l2:"):
             cap = cv2.VideoCapture(c.source[5:], cv2.CAP_V4L2)
@@ -192,7 +254,7 @@ class Camera:
         elif c.source.startswith("gst:"):
             return _GstJpeg(c.source[4:])
         elif c.source.startswith("v4l2depth:"):
-            return _V4l2Raw(c.source[10:], c.width, c.height, c.fps, "Z16 ", 2)
+            return _V4l2Raw(c.source[10:], c.width, c.height, c.fps)
         else:
             raise ValueError(f"camera {c.name}: unknown source '{c.source}'")
         if not cap.isOpened():
@@ -212,46 +274,71 @@ class Camera:
                           self._cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
         return frame
 
+    def _scene_pose(self) -> np.ndarray:
+        from .. import world
+
+        if self.pose is not None:
+            return self.pose()
+        return world.transform(self.config.xyz, self.config.rpy) @ world.OPTICAL
+
+    def _read(self, cap, start: float):
+        """One frame: (JPEG bytes or None, picture to encode or None, raw picture or None,
+        arrival time)."""
+        c = self.config
+        if c.source == "test":
+            return None, self._test_frame(start), None, start
+        if c.source.startswith("gst:"):
+            return cap.read_jpeg(), None, None, time.monotonic()   # already encoded
+        if c.source.startswith("v4l2depth:"):
+            stamp, depth = cap.read()
+            return None, depth_mm_to_image(depth), depth, stamp
+        if c.source.startswith("scene:"):
+            from . import scene
+
+            depth, colour = scene.render(self._scene_pose(), c.intrinsics())
+            return (None, depth_mm_to_image(depth), depth, start) if c.is_depth else (None, colour, colour, start)
+        if c.source.startswith("realsense"):
+            parts = c.source.split(":")[1:]
+            serial = parts[0] if parts and parts[0] not in ("color", "depth") else ""
+            data = _RealSense.get(serial, c.width, c.height, c.fps).read("depth" if c.is_depth else "color")
+            self.error = None
+            if c.is_depth:
+                depth = np.clip(data * 1000, 0, 65535).astype(np.uint16)
+                return None, depth_mm_to_image(depth), depth, time.monotonic()
+            return None, data, data, time.monotonic()
+        ok, frame = cap.read()
+        if not ok:
+            raise OSError(f"camera {c.name}: read failed")
+        return None, frame, frame, time.monotonic()
+
     def _run(self) -> None:
         cv2 = self._cv2
         c = self.config
         period = 1.0 / max(1, c.fps)
+        paced = c.source == "test" or c.source.startswith("scene:")   # the others pace themselves
         cap = None
         while not self._stop.is_set():
             try:
-                if cap is None and c.source != "test" and not c.source.startswith("realsense"):
+                if cap is None:
                     cap = self._open()
                     self.error = None
                 start = time.monotonic()
-                if c.source == "test":
-                    frame = self._test_frame(start)
-                elif c.source.startswith("gst:"):
-                    jpeg = cap.read_jpeg()   # already encoded: publish as it is
+                jpeg, frame, raw, stamp = self._read(cap, start)
+                if jpeg is None:
+                    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, c.quality])
+                    jpeg = encoded.tobytes() if ok else None
+                if jpeg is not None:
+                    now = time.monotonic()
                     with self._lock:
+                        if self._stamp:
+                            rate = 1.0 / max(1e-3, now - self._stamp)
+                            self.fps = rate if not self.fps else 0.9 * self.fps + 0.1 * rate
                         self._jpeg = jpeg
                         self._sequence += 1
-                        self._stamp = time.monotonic()
-                    continue
-                elif c.source.startswith("v4l2depth:"):
-                    frame = depth_to_image(cap.read_depth_m())
-                elif c.source.startswith("realsense"):
-                    parts = c.source.split(":")[1:]
-                    stream = parts[-1] if parts and parts[-1] in ("color", "depth") else "color"
-                    serial = parts[0] if parts and parts[0] not in ("color", "depth") else ""
-                    data = _RealSense.get(serial, c.width, c.height, c.fps).read(stream)
-                    frame = depth_to_image(data) if stream == "depth" else data
-                    self.error = None
-                else:
-                    ok, frame = cap.read()
-                    if not ok:
-                        raise OSError(f"camera {c.name}: read failed")
-                ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, c.quality])
-                if ok:
-                    with self._lock:
-                        self._jpeg = encoded.tobytes()
-                        self._sequence += 1
-                        self._stamp = time.monotonic()
-                if c.source == "test":
+                        self._stamp = now
+                        if raw is not None:
+                            self._raw, self._raw_stamp = raw, stamp
+                if paced:
                     self._stop.wait(max(0.0, period - (time.monotonic() - start)))
             except Exception as e:  # keep trying: cameras get unplugged and come back
                 self.error = str(e)

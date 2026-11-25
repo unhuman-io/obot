@@ -172,17 +172,65 @@ The page runs in any browser, on Windows, macOS or Linux; only the robot side ne
 Linux. With `[model] urdf = "..."` in the configuration it draws the robot in 3D from its
 URDF, posed with the measured joint angles.
 
-Cameras are listed in the robot configuration (`realsense:color` and `realsense:depth`
-show an Intel RealSense through `pyrealsense2`; depth is drawn in false colour):
+Cameras are listed in the robot configuration:
 
 ```toml
 [[camera]]
 name = "front"
-source = "v4l2:/dev/video0"     # or "gst:<pipeline ending in appsink>", or "test"
+source = "v4l2:/dev/video0"     # or "gst:<pipeline ending in a JPEG encoder>", or "test"
 width = 640
 height = 480
 fps = 15
 ```
+
+A depth camera (Intel RealSense D435) is two entries, colour and depth. On the Jetson
+kernels it appears as ordinary video devices and needs nothing from Intel
+(`v4l2:` for colour, `v4l2depth:` for depth; `sudo apt install v4l-utils`); elsewhere
+`realsense:color` and `realsense:depth` read it through `pyrealsense2`. Depth is shown in
+false colour, near = warm.
+
+### The 3D view: the robot and what it has seen
+
+With a depth camera the page also draws a map of the surroundings around the robot: every
+depth picture is turned into points, placed in the room using the wheel odometry (and the
+joint angles, for a camera on the arm), and kept in a grid of 3 cm cells. Cells stay after
+the camera has turned away, which is the history; a cell the camera later sees *through*
+(the thing was picked up) is taken out again. The orange line is the way the robot drove.
+
+For that the configuration has to say where each camera is:
+
+```toml
+[[camera]]
+name = "d435"
+source = "v4l2:/dev/video3"
+xyz = [0.10, 0.015, 0.40]       # m, in the base: x forward, y left, z up from the floor
+rpy = [0.0, 0.6, 0.0]           # rad; rpy[1] > 0 looks down
+
+[[camera]]
+name = "d435_depth"
+source = "v4l2depth:/dev/video1"
+xyz = [0.10, 0.0, 0.40]
+rpy = [0.0, 0.6, 0.0]
+color = "d435"                  # the camera whose picture colours the points
+# link = "wrist_camera_link"    # for a camera on the arm: a link of the robot model
+# hfov = 79.6                   # horizontal field of view, degrees (default: D435, 4:3)
+
+[world]                         # optional; these are the defaults
+voxel = 0.03
+range = 3.5
+max_voxels = 250000
+```
+
+**Level to floor** on the page measures height and tilt of a base camera from the floor in
+its picture and shows the `xyz` and `rpy` to put in the configuration. Things to know:
+
+- The map is only as good as the odometry. Wheel slip shifts new sightings against old
+  ones; there is no correction from the pictures themselves (no SLAM) yet.
+- The fields of view are the D435's nominal ones, not the calibration stored in the
+  camera, so sizes can be off by a few percent.
+- `obot ui --sim-cameras` (with `obot-rtd --sim`) shows all of this without a camera: the
+  server draws depth and colour pictures of a small made-up room (`scene:depth`,
+  `scene:color`).
 
 ## Bringing up a real robot
 

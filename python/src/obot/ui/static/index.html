@@ -49,6 +49,10 @@
   .keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; color: var(--muted); font-size: 13px; }
   .keys b { color: var(--ink); font-weight: 600; }
   #model { width: 100%; height: 360px; }
+  #model.world { height: 460px; }
+  h2 .tools { float: right; text-transform: none; letter-spacing: 0; }
+  h2 .tools button { padding: 1px 8px; font-size: 12px; margin-left: 4px; }
+  #world-note { margin: 6px 0 0; font-size: 12px; }
   .simcam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
   .simcam canvas { display: block; width: 100%; height: 100%; }
   #model canvas { display: block; border-radius: 6px; }
@@ -76,8 +80,14 @@
     <div id="cameras" class="cameras"><p class="muted">No cameras configured.</p></div>
   </section>
   <section id="model-section" style="display:none">
-    <h2>Robot</h2>
+    <h2><span id="model-title">Robot</span>
+      <span id="world-tools" class="tools" style="display:none">
+        <button id="world-colour" title="Colour the map by what the camera saw, or by height above the floor">Colour: camera</button>
+        <button id="world-level" title="Point the depth camera so that the floor fills a good part of its picture: its height and tilt are then worked out from the floor">Level to floor</button>
+        <button id="world-clear" title="Forget what was seen and start the map again">Clear map</button>
+      </span></h2>
     <div id="model"></div>
+    <p id="world-note" class="muted"></p>
   </section>
   </div>
   <div class="side">
@@ -125,10 +135,16 @@ function fmt(x, digits = 2) { return x === null || x === undefined ? "-" : x.toF
 function showInfo(next) {
   info = next;
   text("robot", info.robot || "obot");
-  if (info.model && !window.obotModelRequested) {
+  if ((info.model || info.world) && !window.obotModelRequested) {
     window.obotModelRequested = true;
     $("model-section").style.display = "";
-    import("/static/model.js").then((m) => m.show($("model"), query, simCameras)).then((view) => { window.obotModel = view; })
+    if (info.world) {
+      $("model").className = "world";
+      $("world-tools").style.display = "";
+      text("model-title", "Robot and what it has seen");
+    }
+    import("/static/model.js").then((m) => m.show($("model"), query, simCameras, { model: info.model, world: info.world }))
+      .then((view) => { window.obotModel = view; })
       .catch((e) => { $("model").textContent = "3D view unavailable: " + e; });
   }
   const cams = $("cameras");
@@ -168,6 +184,13 @@ function showInfo(next) {
 
 function showState(s) {
   if (window.obotModel && s.q) window.obotModel.setJoints(info.joints, s.q, s.odom);
+  if (window.obotModel && window.obotModel.world && s.world) {
+    window.obotModel.world.setCameras(s.world.cameras);
+    const leveled = Object.entries(s.world.leveled || {}).map(([name, r]) => name + ": " + (r.error ? r.error :
+      "xyz = [" + r.xyz.join(", ") + "], rpy = [" + r.rpy.join(", ") + "] (put these in the configuration to keep them)"));
+    text("world-note", [s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update",
+                        s.world.error ? "error: " + s.world.error : "", ...leveled].filter(Boolean).join(" · "));
+  }
   if (s.status) {
     text("operator", (s.status.cartesian ? "Cartesian mode  " : "") +
          (s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : ""));
@@ -209,7 +232,7 @@ function showState(s) {
   text("age", s.command_age_ms === null ? "no command yet" : fmt(s.command_age_ms, 0) + " ms");
   for (const [name, cam] of Object.entries(s.cameras || {})) {
     const caption = $("cam-" + name);
-    if (caption) caption.textContent = name + (cam.error ? ": " + cam.error : "");
+    if (caption) caption.textContent = name + (cam.error ? ": " + cam.error : cam.fps ? " · " + fmt(cam.fps, 0) + " fps" : "");
   }
 }
 
@@ -234,6 +257,15 @@ function send(message) {
 
 document.querySelectorAll("button[data-request]").forEach((button) => {
   button.addEventListener("click", () => send({ type: "request", request: button.dataset.request }));
+});
+
+$("world-clear").addEventListener("click", () => send({ type: "world", action: "clear" }));
+$("world-level").addEventListener("click", () => send({ type: "world", action: "level" }));
+$("world-colour").addEventListener("click", () => {
+  const world = window.obotModel && window.obotModel.world;
+  if (!world) return;
+  world.colourByHeight(!world.byHeight);
+  $("world-colour").textContent = world.byHeight ? "Colour: height" : "Colour: camera";
 });
 
 // --- input: a real gamepad if there is one, otherwise the keyboard --------------------------

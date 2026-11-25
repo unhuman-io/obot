@@ -94,6 +94,13 @@ def cmd_ui(args) -> int:
             for where, link in (("base", "base_camera_link"), ("gripper", "wrist_camera_link"))
             for mode in ("color", "depth")
         ]
+        # The same kind of room drawn on this side as real pictures, which is what the 3D
+        # world view is built from.
+        mount = {"xyz": (0.15, 0.0, 0.5), "rpy": (0.0, 0.5, 0.0), "width": 320, "height": 240, "fps": 10}
+        tools.cameras += [
+            config_module.CameraConfig(name="room", source="scene:color", **mount),
+            config_module.CameraConfig(name="room depth", source="scene:depth", color="room", **mount),
+        ]
     where = f"http://{'<this machine>' if args.host == '0.0.0.0' else args.host}:{args.port}/"
     print(f"obot ui: {where}{'?token=...' if args.token else ''}", file=sys.stderr)
     if not args.token and args.host == "0.0.0.0":

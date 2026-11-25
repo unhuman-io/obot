@@ -235,31 +235,59 @@ def test_gstreamer_jpeg_stream_is_split_into_frames(monkeypatch):
         source.read_jpeg()
 
 
-def test_raw_depth_stream_is_split_into_frames(monkeypatch):
-    import io
+def test_raw_depth_reader_hands_out_the_newest_frame(monkeypatch):
+    import os
     import subprocess
+    import time
 
     import numpy as np
 
     from obot.ui import cameras
 
-    frames = [np.full((2, 3), value, "<u2") for value in (500, 1500)]
-    frames[1][0, 0] = 65535                                      # no reading
-    frames[1][1, 2] = 0
+    read_end, write_end = os.pipe()
 
     class FakeProcess:
-        stdout = io.BufferedReader(io.BytesIO(b"".join(f.tobytes() for f in frames)), buffer_size=4)
+        stdout = os.fdopen(read_end, "rb")
 
         def kill(self): ...
         def wait(self): ...
 
     started = {}
     monkeypatch.setattr(subprocess, "Popen", lambda args, **k: started.setdefault("args", args) and FakeProcess())
-    source = cameras._V4l2Raw("/dev/video9", 3, 2, 15, "Z16 ", 2)
+    source = cameras._V4l2Raw("/dev/video9", 3, 2, 15)
     assert "--set-fmt-video=width=3,height=2,pixelformat=Z16 " in started["args"]
-    assert source.read_depth_m() == pytest.approx(np.full((2, 3), 0.5))
-    second = source.read_depth_m()
-    assert second[0, 1] == pytest.approx(1.5)
-    assert second[0, 0] == 0 and second[1, 2] == 0               # both kinds of "no reading" are 0
-    with pytest.raises(OSError):
-        source.read_depth_m()
+
+    def arrived(count):
+        end = time.monotonic() + 2
+        while source._count < count and time.monotonic() < end:
+            time.sleep(0.005)
+        return source._count == count
+
+    # Two frames arrive before anyone asks: the reader is behind, and gets the newer one.
+    os.write(write_end, np.full((2, 3), 500, "<u2").tobytes() + np.full((2, 3), 1500, "<u2").tobytes())
+    assert arrived(2)
+    stamp, frame = source.read()
+    assert frame.dtype == np.uint16 and frame.shape == (2, 3) and (frame == 1500).all()
+    assert time.monotonic() - stamp < 1
+    # Nothing new: the reader waits instead of being given the same frame again.
+    with pytest.raises(OSError, match="no frame"):
+        source.read(timeout=0.1)
+    os.write(write_end, np.full((2, 3), 2500, "<u2").tobytes())
+    assert (source.read()[1] == 2500).all()
+    os.close(write_end)
+    with pytest.raises(OSError, match="ended"):
+        source.read()
+
+
+def test_depth_pictures_are_coloured_by_distance():
+    import numpy as np
+
+    from obot.ui.cameras import depth_mm_to_image, depth_to_image
+
+    depth = np.array([[0, 300, 2000, 3900, 65535]], np.uint16)
+    image = depth_mm_to_image(depth)
+    assert image.shape == (1, 5, 3) and image.dtype == np.uint8
+    assert image[0, 0].tolist() == [0, 0, 0] and image[0, 4].tolist() == [0, 0, 0]     # no reading: black
+    assert image[0, 1, 2] > 150 and image[0, 1, 0] < 80                               # near: red (BGR)
+    assert image[0, 3, 0] > 100 and image[0, 3, 2] < 100                              # far: blue
+    assert (depth_to_image(depth.astype(np.float32) / 1000)[0, :4] == image[0, :4]).all()

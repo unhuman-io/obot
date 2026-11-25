@@ -23,6 +23,9 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
         for where, link in (("base", "base_camera_link"), ("gripper", "wrist_camera_link"))
         for mode in ("color", "depth")
     ]
+    from test_world import scene_config
+
+    ui.config.cameras += scene_config().cameras       # real depth and colour pictures of a made-up room
     server = TestServer(ui.app())
     await server.start_server()
     errors = []
@@ -55,6 +58,18 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
         assert await page.locator(".simcam canvas").count() == 4
         assert "shoulder_pitch_joint" in await page.evaluate("window.obotModel.joints")
 
+        # What the depth camera has seen is drawn around the robot: the floor, and the red
+        # shirt lying on it where the room has one.
+        await page.wait_for_function("window.obotModel.world && window.obotModel.world.count > 500", timeout=15000)
+        await page.wait_for_function("window.obotModel.world.near(0.9, 0.25, 0.09, 0.07) !== null", timeout=5000)
+        shirt = await page.evaluate("window.obotModel.world.near(0.9, 0.25, 0.09, 0.07)")
+        assert shirt[3:] == [201, 79, 79]
+        await page.wait_for_function("document.getElementById('world-note').textContent.includes('map cells')")
+        await page.click("#world-colour")
+        assert await page.text_content("#world-colour") == "Colour: height"
+        await page.click("#world-colour")
+        assert await page.evaluate("window.obotModel.world.failed") == 0
+
         # Buttons are requests.
         await page.click("button[data-request=enable]")
         await page.wait_for_function("document.getElementById('mode').textContent === 'active'", timeout=5000)
@@ -72,6 +87,9 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
         shot = os.environ.get("OBOT_UI_SCREENSHOT")
         if shot:
             await page.screenshot(path=shot, full_page=True)
+
+        # The way driven is drawn, and the map has grown with it.
+        await page.wait_for_function("window.obotModel.world.trail > 3", timeout=5000)
 
         # Letting go stops the robot.
         await page.keyboard.up("ShiftLeft")

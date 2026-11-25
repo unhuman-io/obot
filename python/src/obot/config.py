@@ -25,6 +25,45 @@ class CameraConfig:
     height: int = 480
     fps: int = 15
     quality: int = 70  # JPEG quality of the stream
+    # Where the camera is, for the 3D world view: the pose of its body frame (x along the
+    # view, y left, z up) in a link of the robot model. No link: the base, whose origin is
+    # on the floor between the wheels.
+    link: str | None = None
+    xyz: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    # Horizontal field of view in degrees. The defaults are a RealSense D435's 4:3 modes
+    # (640x480): 79.6 for depth, 55 for colour. Its 16:9 modes: 87 and 69.
+    hfov: float | None = None
+    color: str | None = None  # depth cameras: the camera whose picture colours the 3D points
+    # How old a picture is when it arrives, s: the robot's pose that long ago is used.
+    latency: float | None = None
+
+    @property
+    def is_depth(self) -> bool:
+        return self.source.startswith("v4l2depth:") or self.source.split(":")[-1] == "depth"
+
+    @property
+    def drawn_by_page(self) -> bool:
+        return self.source.startswith("sim:")
+
+    def intrinsics(self):
+        from .world import Intrinsics
+
+        return Intrinsics.from_hfov(self.width, self.height, self.hfov or (79.6 if self.is_depth else 55.0))
+
+
+@dataclass
+class WorldConfig:
+    """The 3D map built from the depth cameras ([world] in the configuration)."""
+
+    enabled: bool = True
+    voxel: float = 0.03  # edge of a map cell, m
+    range: float = 3.5  # readings farther than this are not used, m
+    near: float = 0.2
+    max_voxels: int = 250_000
+    stride: int = 4  # every n-th pixel of a depth picture in each direction
+    rate: float = 5.0  # map updates per second and camera
+    max_turn_rate: float = 1.0  # rad/s; while the base turns faster, pictures are not used
 
 
 @dataclass
@@ -58,6 +97,7 @@ class ToolsConfig:
     teleop: TeleopConfig = field(default_factory=TeleopConfig)
     arm: ArmConfig | None = None
     urdf: str | None = None  # robot model for the operator page, [model] urdf = "..."
+    world: WorldConfig = field(default_factory=WorldConfig)
 
 
 def find_config(path: str | None = None) -> str | None:
@@ -83,8 +123,23 @@ def load(path: str | None = None) -> ToolsConfig:
     config.base_v_max = float(base.get("v_max", config.base_v_max))
     config.base_omega_max = float(base.get("omega_max", config.base_omega_max))
     for entry in doc.get("camera", []):
-        known = {k: entry[k] for k in ("name", "source", "width", "height", "fps", "quality") if k in entry}
+        known = {k: entry[k] for k in ("name", "source", "width", "height", "fps", "quality", "link", "hfov",
+                                       "color", "latency") if k in entry}
+        for key in ("xyz", "rpy"):
+            if key in entry:
+                if len(entry[key]) != 3:
+                    raise ValueError(f"{found}: camera {entry.get('name')}: {key} needs three numbers")
+                known[key] = tuple(float(v) for v in entry[key])
         config.cameras.append(CameraConfig(**known))
+    names = [c.name for c in config.cameras]
+    for camera in config.cameras:
+        if camera.color is not None and camera.color not in names:
+            raise ValueError(f"{found}: camera {camera.name}: color = \"{camera.color}\" is not a camera")
+    world = doc.get("world", {})
+    for key, kind in (("enabled", bool), ("voxel", float), ("range", float), ("near", float), ("max_voxels", int),
+                      ("stride", int), ("rate", float), ("max_turn_rate", float)):
+        if key in world:
+            setattr(config.world, key, kind(world[key]))
     arm = doc.get("arm")
     if arm and arm.get("type") == "planar3r":
         config.arm = ArmConfig(list(arm["joints"]), [float(v) for v in arm["lengths"]],

@@ -86,6 +86,7 @@ class UiServer:
         self.robot: Robot | None = None
         self.mapper: TeleopMapper | None = None
         self.cameras: dict = {}
+        self.world = None  # the 3D map of the surroundings, if there is a depth camera
         self.sockets: dict[web.WebSocketResponse, Operator] = {}
         self.local: Operator | None = None
         self.joystick = None
@@ -103,6 +104,7 @@ class UiServer:
         app.router.add_get("/camera/{name}.mjpg", self._mjpeg)
         app.router.add_get("/camera/{name}.jpg", self._jpeg)
         app.router.add_get("/api/model", self._model)
+        app.router.add_get("/api/world", self._world)
         app.router.add_get("/model/{path:.*}", self._mesh)
         app.router.add_static("/static", STATIC)
         app.on_startup.append(self._start)
@@ -139,6 +141,7 @@ class UiServer:
                 for c in self.config.cameras if c.source.startswith("sim:") and self.enable_cameras
             ],
             "model": bool(self.config.urdf and os.path.isfile(self.config.urdf)),
+            "world": self.world.frustums() if self.world else None,
         }
 
     async def _info(self, request: web.Request) -> web.Response:
@@ -148,6 +151,17 @@ class UiServer:
         if not self.config.urdf or not os.path.isfile(self.config.urdf):
             raise web.HTTPNotFound(text="no robot model configured ([model] urdf = ...)")
         return web.json_response(model.load(self.config.urdf))
+
+    async def _world(self, request: web.Request) -> web.Response:
+        """What changed in the 3D map since the revision the page has (see WorldMap.delta)."""
+        if self.world is None:
+            raise web.HTTPNotFound(text="no depth camera configured")
+        try:
+            since, epoch, trail = (int(request.query.get(key, 0)) for key in ("since", "epoch", "trail"))
+        except ValueError:
+            raise web.HTTPBadRequest(text="since, epoch and trail are numbers") from None
+        return web.Response(body=self.world.map.delta(since, epoch, trail),
+                            content_type="application/octet-stream", headers={"Cache-Control": "no-store"})
 
     async def _mesh(self, request: web.Request) -> web.FileResponse:
         path = model.mesh_path(self.config.urdf, request.match_info["path"]) if self.config.urdf else None
@@ -176,6 +190,11 @@ class UiServer:
                     self._queue(operator.update(pad))
                 elif data.get("type") == "request" and data.get("request") in _REQUESTS:
                     self._queue(_REQUESTS[data["request"]])
+                elif data.get("type") == "world" and self.world is not None:
+                    if data.get("action") == "clear":
+                        self.world.clear()
+                    elif data.get("action") == "level":   # fits a plane: not on the event loop
+                        await asyncio.get_running_loop().run_in_executor(None, self.world.level)
         finally:
             self.sockets.pop(ws, None)
             if self.controlling is operator:
@@ -221,14 +240,21 @@ class UiServer:
             from .cameras import Camera
 
             for camera_config in self.config.cameras:
-                if not camera_config.source.startswith("sim:"):   # those are drawn by the page
+                if not camera_config.drawn_by_page:
                     self.cameras[camera_config.name] = Camera(camera_config)
+            if self.config.world.enabled and any(c.is_depth and c.name in self.cameras for c in self.config.cameras):
+                from .worldview import WorldView
+
+                self.world = WorldView(self.config, self.cameras)
+                self.world.start()
         self._task = asyncio.create_task(self._loop())
 
     async def _stop(self, app: web.Application) -> None:
         self._task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._task
+        if self.world:
+            self.world.stop()
         for camera in self.cameras.values():
             camera.stop()
         if self.robot:
@@ -318,6 +344,10 @@ class UiServer:
 
             self._poll_joystick()
             state = self.robot.state()
+            if self.world is not None and state is not None:
+                joints = {name: float(q) for name, q in zip(self.robot.info.joint_names, state["q"], strict=False)}
+                self.world.update_pose(float(state["odom_x"]), float(state["odom_y"]), float(state["odom_yaw"]),
+                                       float(state["base_omega"]), joints)
             operator = self._choose_operator()
             pad = operator.pad if operator else GamepadState()
             out = self.mapper.step(pad, state, dt)
@@ -328,9 +358,11 @@ class UiServer:
                                cartesian=out.cartesian)
 
             if tick % (TICK_HZ // STATE_HZ) == 0 and state is not None:
-                cameras = {name: {"age": None if c.age == float("inf") else round(c.age, 2), "error": c.error}
+                cameras = {name: {"age": None if c.age == float("inf") else round(c.age, 2), "error": c.error,
+                                  "fps": round(c.fps, 1)}
                            for name, c in self.cameras.items()}
                 await self._broadcast({"type": "state", "status": self.status, "cameras": cameras,
+                                       "world": self.world.describe() if self.world else None,
                                        **describe(state, self.robot.info)})
 
 
