@@ -13,6 +13,14 @@ comm_timeout_cycles = 20
 name = "usb"
 interface = "usbrt"
 
+# Signs: every joint has direction 1 (the default, so the key is not written). Which way is
+# positive is settled in each motor controller's firmware (phase order and encoder
+# direction), so that the host never has to know how a motor is mounted: a positive wheel
+# velocity drives the robot forward on both sides.
+#
+# wrap: the wheel firmware keeps its position within one revolution (encoder rollover) and
+# jumps back at the end of it. The daemon counts the revolutions up again.
+
 [[joint]]
 name = "left_wheel_joint"
 bus = "usb"
@@ -21,6 +29,7 @@ id = 1
 gear_ratio = 1.0
 torque_constant = 0.5         # N m / A, VERIFY
 continuous = true
+wrap = 6.2831853              # rad: one revolution
 qd_max = 8.0
 qdd_max = 15.0
 tau_max = 8.0

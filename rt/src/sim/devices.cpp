@@ -101,6 +101,9 @@ bool ObotDeviceSim::make_status(MotorStatus& ms) {
     ms.mcu_timestamp = mcu_timestamp_;
     ms.host_timestamp_received = host_timestamp_;
     ms.motor_position = plant_.q * p_.gear_ratio;
+    if (p_.position_wrap > 0) {  // as the firmware's rollover: within half a wrap either side of zero
+        ms.motor_position -= p_.position_wrap * std::round(ms.motor_position / p_.position_wrap);
+    }
     ms.joint_position = plant_.q;
     ms.iq = iq_;
     ms.torque = iq_ * p_.torque_constant * p_.gear_ratio;

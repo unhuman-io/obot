@@ -50,6 +50,14 @@ data_bitrate = 5_000_000
 #
 # q_min / q_max are the URDF limits (the hard stops) pulled in by 3 degrees.
 
+# Signs: every joint has direction 1 (the default, so the key is not written). Which way is
+# positive is settled in each motor controller's firmware (phase order and encoder
+# direction), so that the host never has to know how a motor is mounted: a positive wheel
+# velocity drives the robot forward on both sides.
+#
+# wrap: the wheel firmware keeps its position within one revolution (encoder rollover) and
+# jumps back at the end of it. The daemon counts the revolutions up again.
+
 [[joint]]
 name = "shoulder_pitch_joint"
 bus = "arm_a"
@@ -57,7 +65,6 @@ driver = "obot"
 id = 1                        # VERIFY
 gear_ratio = 39.0
 torque_constant = 0.1         # N m / A at the motor, VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY: set by the homing procedure
 q_min = -1.780
 q_max = 0.733
@@ -75,7 +82,6 @@ driver = "obot"
 id = 2                        # VERIFY
 gear_ratio = 39.0
 torque_constant = 0.1         # N m / A at the motor, VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -0.087
 q_max = 3.229
@@ -93,7 +99,6 @@ driver = "obot"
 id = 3                        # VERIFY
 gear_ratio = 6.0
 torque_constant = 0.1         # N m / A at the motor, VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.658
 q_max = 1.431
@@ -111,7 +116,6 @@ driver = "obot"
 id = 4                        # VERIFY
 gear_ratio = 6.0
 torque_constant = 0.1         # N m / A at the motor, VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -2.827
 q_max = 2.827
@@ -132,8 +136,8 @@ driver = "obot"
 id = 1                        # VERIFY
 gear_ratio = 1.0
 torque_constant = 0.5         # N m / A, VERIFY
-direction = 1                 # VERIFY
 continuous = true
+wrap = 6.2831853              # rad: one revolution
 qd_max = 12.0                 # rad/s = 1.5 m/s at the tyre
 qdd_max = 20.0
 tau_max = 10.0
@@ -147,8 +151,8 @@ driver = "obot"
 id = 2                        # VERIFY
 gear_ratio = 1.0
 torque_constant = 0.5         # N m / A, VERIFY
-direction = -1                # VERIFY: the motors are mirrored
 continuous = true
+wrap = 6.2831853              # rad: one revolution
 qd_max = 12.0
 qdd_max = 20.0
 tau_max = 10.0

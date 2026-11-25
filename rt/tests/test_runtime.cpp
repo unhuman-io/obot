@@ -72,6 +72,7 @@ bus = "fd"
 id = 2
 torque_constant = 0.5
 continuous = true
+wrap = 6.2831853
 qd_max = 10.0
 qdd_max = 20.0
 tau_max = 10.0
@@ -84,6 +85,7 @@ id = 3
 torque_constant = 0.5
 direction = -1
 continuous = true
+wrap = 6.2831853
 qd_max = 10.0
 qdd_max = 20.0
 tau_max = 10.0
@@ -426,6 +428,40 @@ TEST_CASE("commands with non-finite numbers or unknown modes are ignored") {
     r.cycle();
     CHECK((r.state.warning & ipc::robot_warning::kCommandInvalid) != 0);
     CHECK(mode_of(r) == kActive);
+}
+
+TEST_CASE("a wheel drive that wraps its position every revolution: position and odometry stay continuous") {
+    Rig r;
+    r.enable();
+    r.command.base_mode = static_cast<uint32_t>(ipc::BaseMode::Twist);
+    r.command.base_v = 0.8f;  // 8 rad/s at the wheels: a wrap every 0.8 s
+    float last_q = 0, last_x = 0, biggest_q_step = 0, biggest_x_step = 0;
+    bool drive_wrapped = false;
+    float last_drive = 0;
+    for (int i = 0; i < 6000; ++i) {
+        if (i % 10 == 0) r.send();
+        r.cycle();
+        if (i > 0) {
+            biggest_q_step = std::max(biggest_q_step, std::fabs(r.state.q[kLeft] - last_q));
+            biggest_x_step = std::max(biggest_x_step, std::fabs(static_cast<float>(r.state.odom_x) - last_x));
+        }
+        last_q = r.state.q[kLeft];
+        last_x = static_cast<float>(r.state.odom_x);
+        MotorStatus raw;
+        r.device(kLeft).make_status(raw);
+        if (std::fabs(raw.motor_position - last_drive) > 3.0f) drive_wrapped = true;  // the drive did jump
+        last_drive = raw.motor_position;
+    }
+    CHECK(drive_wrapped);
+    CHECK(mode_of(r) == kActive);
+    CHECK(r.state.fault == 0);
+    CHECK(biggest_q_step < 0.02f);  // 8 rad/s for 1 ms, and no jump of a revolution
+    CHECK(biggest_x_step < 0.002f);
+    CHECK(r.state.q[kLeft] > 40.0f);             // several revolutions, counted up
+    CHECK(r.state.q[kRight] > 40.0f);            // forward is positive for both joints...
+    CHECK(r.device(kRight).plant().q < -40.0f);  // ...whichever way the drive itself counts (direction = -1 here)
+    CHECK(r.state.odom_x == doctest::Approx(0.1 * r.state.q[kLeft]).epsilon(0.02));
+    CHECK(std::fabs(r.state.odom_y) < 0.01);
 }
 
 TEST_CASE("base twist: wheel speeds, direction signs and odometry") {

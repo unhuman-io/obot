@@ -47,8 +47,23 @@ void ObotDriver::fill(const DriveCommand& command, uint32_t cycle, MotorCommand&
 
 void ObotDriver::on_status(const MotorStatus& ms, int64_t rx_time_ns) {
     const Transmission& t = config_.transmission;
-    status_.q = config_.output_encoder ? t.direction * ms.joint_position - t.zero_offset
-                                       : t.direction * ms.motor_position / t.gear_ratio - t.zero_offset;
+    const float raw =
+        config_.output_encoder ? t.direction * ms.joint_position : t.direction * ms.motor_position / t.gear_ratio;
+    if (config_.wrap > 0 && have_raw_) {
+        // A wheel's drive keeps its position within one stretch (a revolution) and jumps
+        // back by that much at the end of it. Here the turns are added up again, so the
+        // position is continuous: for odometry, for plots, and for anything that takes
+        // differences.
+        float step = raw - last_raw_;
+        if (step > config_.wrap / 2) step -= config_.wrap;
+        if (step < -config_.wrap / 2) step += config_.wrap;
+        unwrapped_ += step;
+    } else {
+        unwrapped_ = raw;
+    }
+    last_raw_ = raw;
+    have_raw_ = true;
+    status_.q = static_cast<float>(unwrapped_ - t.zero_offset);
     status_.qd =
         config_.output_encoder ? t.direction * ms.joint_velocity : t.direction * ms.motor_velocity / t.gear_ratio;
     status_.tau =

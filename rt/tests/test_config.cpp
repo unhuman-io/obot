@@ -113,6 +113,11 @@ TEST_CASE("mistakes are reported with the place they were made") {
     CHECK(error_of(replaced(kGood, "q_max = 1\nqd_max = 2", "q_max = -2\nqd_max = 2")).find("q_max") !=
           std::string::npos);
     CHECK(error_of(replaced(kGood, "direction = -1", "direction = 0.5")).find("direction") != std::string::npos);
+    // A position that wraps is a wheel's, not an arm joint's.
+    CHECK(error_of(replaced(kGood, "gear_ratio = 9", "gear_ratio = 9\nwrap = 6.28")).find("wrap") != std::string::npos);
+    CHECK(parse_config(replaced(kGood, "id = 3\ncontinuous = true", "id = 3\ncontinuous = true\nwrap = 6.2832"))
+              .joints[3]
+              .wrap == doctest::Approx(6.2832f));
     CHECK(error_of(replaced(kGood, "left = \"wl\"", "left = \"j1\"")).find("continuous") != std::string::npos);
     // There is one kind of actuator; the MIT-mode CubeMars driver is gone.
     CHECK(error_of(replaced(kGood, "bus = \"b\"\nid = 2", "bus = \"b\"\ndriver = \"cubemars_mit\"\nid = 2"))

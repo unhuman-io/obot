@@ -159,6 +159,7 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
                     "torque_sensor",
                     "damped_kd",
                     "continuous",
+                    "wrap",
                     "q_min",
                     "q_max",
                     "limit_margin",
@@ -193,6 +194,7 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
         get(ctx, *t, where, "torque_sensor", j.torque_sensor);
         get(ctx, *t, where, "damped_kd", j.damped_kd);
         get(ctx, *t, where, "continuous", j.continuous);
+        get(ctx, *t, where, "wrap", j.wrap);
         get(ctx, *t, where, "q_min", j.q_min);
         get(ctx, *t, where, "q_max", j.q_max);
         get(ctx, *t, where, "limit_margin", j.limit_margin);
@@ -225,6 +227,9 @@ RobotConfig from_table(const Ctx& ctx, const toml::table& root) {
             // Position commands go to the drive in the motor encoder's frame, which is not
             // related to the output encoder's until the two are aligned.
             ctx.fail(where, "output_encoder is not supported yet for position controlled joints");
+        }
+        if (j.wrap < 0 || (j.wrap > 0 && !j.continuous)) {
+            ctx.fail(where, "wrap is for continuous joints and must not be negative");
         }
         const float dir = j.transmission.direction;
         if (dir != 1.0f && dir != -1.0f) ctx.fail(where, "direction must be 1 or -1");

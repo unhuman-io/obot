@@ -40,6 +40,7 @@ Runtime::Runtime(const RobotConfig& config) : config_(config) {
         dc.output_encoder = jc.output_encoder;
         dc.torque_sensor = jc.torque_sensor;
         dc.damped_kd = jc.damped_kd;
+        dc.wrap = jc.wrap;
         j.driver = actuator::ObotDriver(dc);
         j.position_filter.configure(jc.qd_max, jc.qdd_max);
         joints_.push_back(std::move(j));

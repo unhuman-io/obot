@@ -55,6 +55,7 @@ std::shared_ptr<sim::SimMotor> make_sim_motor(const JointConfig& joint, const Ro
     p.gear_ratio = joint.transmission.gear_ratio;
     p.torque_constant = joint.transmission.torque_constant;
     p.current_limit = joint.sim_current_limit;
+    p.position_wrap = joint.wrap * joint.transmission.gear_ratio;
     // Like a drive configured with a host timeout a little longer than the comm watchdog.
     p.host_timeout_s =
         static_cast<float>(config.period_us) * 1e-6f * static_cast<float>(config.comm_timeout_cycles * 10);

@@ -25,6 +25,14 @@ interface = "usbrt"
 
 # --- Base ------------------------------------------------------------------------------
 
+# Signs: every joint has direction 1 (the default, so the key is not written). Which way is
+# positive is settled in each motor controller's firmware (phase order and encoder
+# direction), so that the host never has to know how a motor is mounted: a positive wheel
+# velocity drives the robot forward on both sides.
+#
+# wrap: the wheel firmware keeps its position within one revolution (encoder rollover) and
+# jumps back at the end of it. The daemon counts the revolutions up again.
+
 [[joint]]
 name = "left_wheel_joint"
 bus = "usb"
@@ -32,8 +40,8 @@ usb_name = "wl"
 id = 1
 gear_ratio = 1.0
 torque_constant = 0.5         # N m / A, VERIFY
-direction = 1                 # VERIFY
 continuous = true
+wrap = 6.2831853              # rad: one revolution
 qd_max = 8.0
 qdd_max = 15.0
 tau_max = 8.0
@@ -47,8 +55,8 @@ usb_name = "wr"
 id = 2
 gear_ratio = 1.0
 torque_constant = 0.5         # N m / A, VERIFY
-direction = -1                # VERIFY
 continuous = true
+wrap = 6.2831853              # rad: one revolution
 qd_max = 8.0
 qdd_max = 15.0
 tau_max = 8.0
@@ -73,7 +81,6 @@ usb_name = "J1"
 id = 3
 gear_ratio = 100.0
 torque_constant = 0.05        # N m / A at the motor, VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.57                 # VERIFY
 q_max = 1.57                  # VERIFY
@@ -91,7 +98,6 @@ usb_name = "j2"
 id = 4
 gear_ratio = 100.0
 torque_constant = 0.05        # VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.57                 # VERIFY
 q_max = 1.57                  # VERIFY
@@ -109,7 +115,6 @@ usb_name = "j3"
 id = 5
 gear_ratio = 100.0
 torque_constant = 0.05        # VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.57                 # VERIFY
 q_max = 1.57                  # VERIFY
@@ -127,7 +132,6 @@ usb_name = "j4"
 id = 6
 gear_ratio = 100.0
 torque_constant = 0.05        # VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.57                 # VERIFY
 q_max = 1.57                  # VERIFY
@@ -145,7 +149,6 @@ usb_name = "j5"
 id = 7
 gear_ratio = 100.0
 torque_constant = 0.05        # VERIFY
-direction = 1                 # VERIFY
 zero_offset = 0.0             # VERIFY
 q_min = -1.57                 # VERIFY
 q_max = 1.57                  # VERIFY

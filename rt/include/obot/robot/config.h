@@ -36,6 +36,7 @@ struct JointConfig {
     float damped_kd = 0;
 
     bool continuous = false;  // no position limits (wheels)
+    float wrap = 0;           // continuous joints: the drive's position wraps by this much, rad
     float q_min = 0;          // commands are clamped to q_min..q_max
     float q_max = 0;
     float limit_margin = 0.05f;  // measured position this far outside the limits is a fault, rad

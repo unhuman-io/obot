@@ -276,8 +276,10 @@ its picture and shows the `xyz` and `rpy` to put in the configuration. Things to
 
 ## Bringing up a real robot
 
-1. Fill in everything marked `VERIFY` in the robot's configuration: ids, directions,
-   zero offsets, torque constants.
+1. Fill in everything marked `VERIFY` in the robot's configuration: ids, zero offsets,
+   torque constants. Joint signs are not set there: every joint has direction 1, and which
+   way is positive is settled in the motor controller's firmware (phase order and encoder
+   direction).
 2. `obot-rtd --check --config FILE`.
 3. Start with the arm unpowered or supported and low gains. `obot status` must show every
    joint reporting and plausible angles before `obot enable`.
