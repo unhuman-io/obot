@@ -43,7 +43,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Deployment scripts
         run: |
-          for f in deploy/*.sh deploy/tests/*.sh; do sh -n "$f"; done
+          for f in deploy/*.sh deploy/tests/*.sh deploy/rig/*.sh; do sh -n "$f"; done
           sh deploy/tests/test-firmware-update.sh
       - name: clang-format
         run: |
@@ -122,6 +122,39 @@ jobs:
         with:
           name: obot-rt-aarch64-static
           path: obot-rt-aarch64-static.tar.gz
+
+  rig:
+    # What the software costs in processor time on a real Jetson Nano: obot-rtd on simulated
+    # actuators and the page server with replayed cameras, measured by obot cpu-test.
+    #
+    # This runs on a computer of ours (deploy/rig/setup-runner.sh), so: never for a pull
+    # request (the runner itself refuses anything but pushes and manual runs of this
+    # repository), a read-only token, and no checkout or other JavaScript action (the
+    # runner's Ubuntu 18.04 is too old for the Node they need).
+    needs: static-aarch64
+    if: github.repository == 'unhuman-io/obot' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: obot-rig
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Source and programs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q src
+          git -C src fetch -q --depth 1 "https://github.com/$GITHUB_REPOSITORY" "$GITHUB_SHA"
+          git -C src checkout -q FETCH_HEAD
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=obot-rt-aarch64-static"
+          url="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api" |
+                 python3 -c 'import json, sys; print(json.load(sys.stdin)["artifacts"][0]["archive_download_url"])')"
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o programs.zip "$url"
+          mkdir programs
+          unzip -q programs.zip -d programs
+          tar -C programs -xzf programs/obot-rt-aarch64-static.tar.gz
+      - name: Processor time
+        run: sh src/deploy/rig/cpu-test.sh programs/obot-rt-aarch64/bin
 
   os-parse:
     # Checks that the Yocto layer and its pinned dependencies parse and that every package

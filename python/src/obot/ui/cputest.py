@@ -76,7 +76,11 @@ def find(port: int) -> dict[str, list[int]]:
     groups: dict[str, list[int]] = {"page server": [server], "obot-navd": [], "reading cameras": [], "obot-rtd": []}
     for pid in below(server):
         groups["obot-navd" if all_of_them[pid]["name"] == "obot-navd" else "reading cameras"].append(pid)
-    groups["obot-rtd"] = [pid for pid, p in all_of_them.items() if p["name"] == "obot-rtd"]
+    # obot-rtd: the one this page server talks to, if it says which (--shm-name), else any.
+    words = all_of_them[server]["arguments"].split()
+    shm = words[words.index("--shm-name") + 1] if "--shm-name" in words[:-1] else None
+    groups["obot-rtd"] = [pid for pid, p in all_of_them.items() if p["name"] == "obot-rtd"
+                          and (shm is None or f"--shm-name {shm}" in p["arguments"])]
     return groups
 
 
