@@ -101,9 +101,11 @@ def test_the_same_map_from_the_same_pictures(room, tmp_path):
         things = lambda view: {tuple(p) for p in np.rint(view.map.obstacles() / 0.03).astype(int).tolist()}  # noqa: E731
         assert same_share(things(python), things(native)) > 0.999
         # What the floor plan remembers to stand where, and how the pictures agreed with it.
-        remembered = lambda view: {tuple(p) for p in np.floor(view.obstacles()[len(view.map.obstacles()):]  # noqa: E731
-                                                              / 0.06).astype(int).tolist()}
+        remembered = lambda view: {tuple(p) for p in view.remembered().tolist()}  # noqa: E731
         assert len(remembered(python)) > 150 and same_share(remembered(python), remembered(native)) > 0.99
+        # For planning the two go together: what is only remembered counts with all of its square.
+        both_a, both_b = python.obstacles(), native.obstacles()
+        assert len(both_a) > len(python.map.obstacles()) and abs(len(both_a) - len(both_b)) < 0.01 * len(both_a)
         assert python.agree[0] > 2000 and python.agree[1] > 0.8 * python.agree[0]
         assert np.allclose(python.agree, native.agree, rtol=0.01, atol=3)
         known_a, known_b = python.known((-60, -60), (130, 130)), native.known((-60, -60), (130, 130))

@@ -17,6 +17,7 @@ Whoever touches a controller takes over at once (the page server cancels the dri
 
 from __future__ import annotations
 
+import contextlib
 import heapq
 import math
 import threading
@@ -26,17 +27,33 @@ import numpy as np
 
 from .. import world
 
-# The base is 0.45 m wide. A plan is followed to within a few centimetres, and what the map
-# knows of a thing grows while the base drives around it, so the plan keeps well clear:
-RADIUS = 0.38  # m: the middle of the wheel axis stays at least this far from everything in the map
-MARGIN = 0.30  # m: and where there is room, this much farther away still
-UNSEEN = 0.38  # m: floor that has not been seen may have anything on it: the same distance
-CELL = 0.06  # m: grid the plan is made on
+# The base from above, in its own frame (x forward from the middle of the wheel axis, y to the
+# left), as rectangles (from x, to x, half the width), from the CAD model: 0.45 m wide at the
+# wheels, with a narrow tail that carries the caster.
+FOOTPRINT = ((-0.125, 0.125, 0.224),   # the wheels and what is between them
+             (-0.26, -0.125, 0.16),    # the deck behind them
+             (-0.375, -0.26, 0.05))    # the tail with the caster
+# How close the middle of the wheel axis may come to things. Driving straight, the base
+# needs half its width; a plan is followed to a few centimetres and the map is good to a
+# few more. A gap has to be twice this wide to be driven through, and a little for where
+# the squares of the plan happen to lie: 0.64 m. (Whichever way the base faces, its wheels
+# and all between them stay within 0.26 m of the middle of the axis; only the tail does not.)
+RADIUS = 0.30  # m
+# Turning on the spot the tail swings round at 0.375 m: where there is less room than this
+# the base can pass, but a plan avoids having to turn there (and before every move the
+# base's whole outline is checked against the map, see Navigator._fits).
+TURN = 0.40  # m
+MARGIN = 0.30  # m: where there is room, a way keeps this much farther from things still
+UNSEEN = 0.32  # m: floor that has not been seen may have anything on it
+CELL = 0.06  # m: squares for choosing where to look next
+PLAN_CELL = 0.03  # m: squares for the way to a place
+FINE = 0.03  # m: the grid things are placed on (the map's voxels)
+SEEN_CELL = 0.06  # m: the squares WorldView keeps "seen to be free" on
 V_MAX, W_MAX = 0.25, 0.7  # m/s, rad/s
 V_ACCEL, W_ACCEL = 0.4, 2.0  # m/s^2, rad/s^2
 LOOKAHEAD = 0.25  # m: the point steered for is this far along the plan
 ARRIVED = 0.06  # m
-FRONT = 0.16  # m: the front edge of the base, from the middle of the wheel axis
+FRONT = 0.13  # m: the front edge of the base, from the middle of the wheel axis
 STOP_GAP = 0.22  # m: nearer than this to the front edge, the base does not drive on
 SLOW_GAP = 0.60  # m: from here on it slows down
 STALE_S = 0.7  # s: pictures older than this are no pictures
@@ -52,30 +69,67 @@ class Costmap:
         where that is so. None: everywhere."""
         import cv2  # here so that the rest of the package works without OpenCV
 
+        # The plan is made on squares of `cell`: 3 cm for a way to a place (a gap the base
+        # just fits through must not be lost between two squares), 6 cm for choosing where
+        # to look next, which goes over everything that can be reached and need not be
+        # exact. Things are placed on a grid of 3 cm either way, the size of the map's
+        # voxels and centred like them. With 3 cm squares the two grids are the same; a
+        # 6 cm square [j, i] has its middle in the fine square [2 j + 1, 2 i + 1].
         self.cell = cell
+        self.fine = FINE
+        self.k = 2 if cell > 1.5 * FINE else 1
         low = np.minimum(start, goal) - pad
         high = np.maximum(start, goal) + pad
-        self.origin = np.floor(low / cell).astype(np.int64)
-        self.shape = tuple((np.ceil(high / cell).astype(np.int64) - self.origin + 1)[::-1])  # rows (y), columns (x)
-        occupied = np.zeros(self.shape, bool)
+        if self.k == 2:
+            self.origin = np.floor(low / cell).astype(np.int64)
+            self.shape = tuple((np.ceil(high / cell).astype(np.int64) - self.origin + 1)[::-1])  # rows (y), columns (x)
+            self.fine_origin = 2 * self.origin
+            fine = np.zeros((2 * self.shape[0] + 1, 2 * self.shape[1] + 1), bool)
+        else:
+            self.origin = np.rint(low / cell).astype(np.int64)
+            self.shape = tuple((np.rint(high / cell).astype(np.int64) - self.origin + 1)[::-1])
+            self.fine_origin = self.origin
+            fine = np.zeros(self.shape, bool)
         if len(obstacles):
-            index = np.floor(np.asarray(obstacles, np.float64) / cell).astype(np.int64) - self.origin
+            index = np.rint(np.asarray(obstacles, np.float64) / self.fine).astype(np.int64) - self.fine_origin
             i, j = index[:, 0], index[:, 1]
-            inside = (i >= 0) & (i < self.shape[1]) & (j >= 0) & (j < self.shape[0])
-            occupied[j[inside], i[inside]] = True
+            inside = (i >= 0) & (i < fine.shape[1]) & (j >= 0) & (j < fine.shape[0])
+            fine[j[inside], i[inside]] = True
+        self.fine_occupied = fine
+        self.fine_clear = cv2.distanceTransform((~fine).astype(np.uint8), cv2.DIST_L2,
+                                                cv2.DIST_MASK_PRECISE) * self.fine
+        # per square of the plan: is anything in it, and how far is its middle from things
+        if self.k == 2:
+            occupied = (fine[:-1:2, :-1:2] | fine[1::2, :-1:2] | fine[2::2, :-1:2] | fine[:-1:2, 1::2]
+                        | fine[1::2, 1::2] | fine[2::2, 1::2] | fine[:-1:2, 2::2] | fine[1::2, 2::2] | fine[2::2, 2::2])
+            self.clearance = self.fine_clear[1::2, 1::2].astype(np.float64)
+        else:
+            occupied = fine
+            self.clearance = self.fine_clear.astype(np.float64)
         self.occupied = occupied
-        # distance from each cell to the nearest thing, m
-        self.clearance = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE) * cell
         from_things = self.clearance
         self.from_things = from_things
         self.blocked = from_things < RADIUS
         self.unknown = np.zeros(self.shape, bool)
         from_unknown = np.full(self.shape, np.inf)
         if known is not None:
+            # What has been seen is kept on squares of 6 cm (WorldView.known). For a plan on
+            # finer squares: each of them is in one of those.
+            if self.k == 2:
+                seen = known(self.origin, self.shape).astype(np.uint8)
+            else:
+                ratio = round(SEEN_CELL / cell)
+                coarse_origin = self.origin // ratio
+                coarse_shape = ((self.origin[1] + self.shape[0] - 1) // ratio - coarse_origin[1] + 1,
+                                (self.origin[0] + self.shape[1] - 1) // ratio - coarse_origin[0] + 1)
+                seen = known(coarse_origin, coarse_shape).astype(np.uint8)
             # (closing the small gaps that the rows of a picture leave between them far away)
-            seen = cv2.morphologyEx(known(self.origin, self.shape).astype(np.uint8), cv2.MORPH_CLOSE,
-                                    np.ones((3, 3), np.uint8))
-            self.unknown = ~seen.astype(bool) & ~occupied
+            seen = cv2.morphologyEx(seen, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)).astype(bool)
+            if self.k != 2:
+                rows = (self.origin[1] + np.arange(self.shape[0])) // ratio - coarse_origin[1]
+                columns = (self.origin[0] + np.arange(self.shape[1])) // ratio - coarse_origin[0]
+                seen = seen[np.ix_(rows, columns)]
+            self.unknown = ~seen & ~occupied
             # What has not been seen may be anything, the back of the box the camera saw the
             # front of for one: the base keeps clear of it too.
             from_unknown = cv2.distanceTransform((~self.unknown).astype(np.uint8), cv2.DIST_L2,
@@ -101,27 +155,50 @@ class Costmap:
         self.blocked |= self.unknown | beside_unknown
         # Each step costs its length, times this: more near things, and much more where the
         # base should not be at all, so that a way out of there leads away from them.
+        # And where there is no room to turn it costs more again: narrow places are for
+        # going straight through, when the way round is much longer.
         self.price = (1.0 + 4.0 * np.clip((RADIUS + MARGIN - self.clearance) / MARGIN, 0.0, 1.0)
+                      + 6.0 * np.clip((TURN - self.clearance) / (TURN - RADIUS), 0.0, 1.0)
                       + 40.0 * np.clip((RADIUS - self.clearance) / RADIUS, 0.0, 1.0))
         # A way through what has not been seen may turn out not to be one.
         self.price[self.blocked & ~self.solid] *= 3.0
 
     def index(self, point) -> tuple[int, int]:
-        return (int(math.floor(point[0] / self.cell)) - int(self.origin[0]),
-                int(math.floor(point[1] / self.cell)) - int(self.origin[1]))
+        if self.k == 2:
+            return (int(math.floor(point[0] / self.cell)) - int(self.origin[0]),
+                    int(math.floor(point[1] / self.cell)) - int(self.origin[1]))
+        return (int(round(point[0] / self.cell)) - int(self.origin[0]),
+                int(round(point[1] / self.cell)) - int(self.origin[1]))
 
     def centre(self, i: int, j: int) -> tuple[float, float]:
-        return ((i + self.origin[0] + 0.5) * self.cell, (j + self.origin[1] + 0.5) * self.cell)
+        middle = 0.5 if self.k == 2 else 0.0
+        return ((i + self.origin[0] + middle) * self.cell, (j + self.origin[1] + middle) * self.cell)
 
     def inside(self, i: int, j: int) -> bool:
         return 0 <= i < self.shape[1] and 0 <= j < self.shape[0]
 
+    def clear_at(self, x: float, y: float) -> float:
+        """How far a place is from the nearest thing in the map, m."""
+        i = int(round(x / self.fine)) - int(self.fine_origin[0])
+        j = int(round(y / self.fine)) - int(self.fine_origin[1])
+        if not (0 <= i < self.fine_clear.shape[1] and 0 <= j < self.fine_clear.shape[0]):
+            return math.inf
+        return float(self.fine_clear[j, i])
+
+    def touching(self, points: np.ndarray) -> int:
+        """How many of the places (N x 2, map frame) have something in the map at them."""
+        index = np.rint(points / self.fine).astype(np.int64) - self.fine_origin
+        i, j = index[:, 0], index[:, 1]
+        inside = (i >= 0) & (i < self.fine_occupied.shape[1]) & (j >= 0) & (j < self.fine_occupied.shape[0])
+        return int(self.fine_occupied[j[inside], i[inside]].sum())
+
     def free_line(self, a, b, clear: float = RADIUS) -> bool:
         """Can the base go straight from a to b, staying `clear` of everything?"""
-        n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (self.cell / 2)))
+        n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / (self.fine / 2)))
         for k in range(n + 1):
-            i, j = self.index((a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n))
-            if not self.inside(i, j) or self.blocked[j, i] or self.clearance[j, i] < clear:
+            x, y = a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n
+            i, j = self.index((x, y))
+            if not self.inside(i, j) or self.blocked[j, i] or self.clear_at(x, y) < clear:
                 return False
         return True
 
@@ -271,11 +348,24 @@ class Costmap:
         while at < len(points) - 1:
             reach = len(points) - 1
             while reach > at + 1 and not self.free_line(points[at], points[reach],
-                                                        min(RADIUS, min(room[at:reach + 1])) - self.cell / 2):
+                                                        min(RADIUS, min(room[at:reach + 1])) - 0.01):
                 reach -= 1
             corners.append(points[reach])
             at = reach
         return corners[1:], whole
+
+
+def _outline(grow: float = 0.005, step: float = 0.025) -> np.ndarray:
+    """Places all over the base's outline (FOOTPRINT, grown a little), in its own frame: N x 2."""
+    places = []
+    for x0, x1, half in FOOTPRINT:
+        xs = np.arange(x0 - grow, x1 + grow + 1e-9, step)
+        ys = np.arange(-half - grow, half + grow + 1e-9, step)
+        places.append(np.stack(np.meshgrid(xs, ys), axis=-1).reshape(-1, 2))
+    return np.concatenate(places)
+
+
+OUTLINE = _outline()
 
 
 def _approach(now: float, wanted: float, step: float) -> float:
@@ -302,6 +392,11 @@ class Navigator:
         self._planning = False
         self._from: tuple[float, float] = (0.0, 0.0)  # where the stretch to path[0] began
         self._blocked_since: float | None = None
+        self._costmap: Costmap | None = None  # the map as the last plan was made on
+        self._looked_at = -math.inf
+        self._look_way, self._swept = 1.0, (0.0, 0.0)
+        self.plan_ms = 0.0  # how long the last plan took to make
+        self._tight_since: float | None = None
         self._serial = 0  # goto() and cancel() make plans that are under way out of date
         self._looked = False  # has looked around from about here for this goal
         self._whole = True  # the plan goes all the way to the goal
@@ -315,6 +410,7 @@ class Navigator:
 
     def describe(self) -> dict:
         return {"state": self.state, "note": self.note, "goal": self.goal, "exploring": self._explore is not None,
+                "plan_ms": round(self.plan_ms),
                 "path": [[round(x, 3), round(y, 3)] for x, y in self.path]}
 
     def goto(self, x: float, y: float) -> None:
@@ -325,6 +421,7 @@ class Navigator:
         self._serial += 1
         self.goal, self.path, self.state, self.note = (float(x), float(y)), [], "planning", ""
         self._blocked_since = None
+        self._tight_since = None
         self._looked = False
         self._legs = 0
         self._plan()
@@ -334,7 +431,23 @@ class Navigator:
         self._explore = None
         self._look("looking around")
 
+    def _around(self) -> None:
+        """The map close around the base, for checking that it has room to turn."""
+        def make():
+            with contextlib.suppress(Exception):
+                here = np.asarray(self.view.base_pose()[:2])
+                self._costmap = Costmap(self.view.obstacles(), here, here, None, cell=PLAN_CELL, pad=1.0)
+
+        if self.threaded:
+            threading.Thread(target=make, name="around", daemon=True).start()
+        else:
+            make()
+
+    SEES = 1.2  # rad: the camera sees this much without turning (a little less than it does)
+
     def _look(self, note: str) -> None:
+        self._looked_at = -math.inf
+        self._look_way, self._swept = 1.0, (0.0, 0.0)
         self._serial += 1
         self.goal, self.path = None, []
         self._looked, self._turned, self._last_yaw = True, 0.0, None
@@ -420,9 +533,12 @@ class Navigator:
             self._plan_now(serial)
 
     def _plan_now(self, serial: int) -> None:
+        began = time.perf_counter()
         try:
             start, goal = self.view.base_pose()[:2], self.goal
-            costmap = Costmap(self.view.obstacles(), np.asarray(start), np.asarray(goal), self.view.known)
+            costmap = Costmap(self.view.obstacles(), np.asarray(start), np.asarray(goal), self.view.known,
+                              cell=PLAN_CELL)
+            self._costmap = costmap
             # A goal in or right next to something in the map: as near to it as the base can
             # be. (Not for a goal that has merely not been seen yet: that is driven towards.)
             gi, gj = costmap.index(goal)
@@ -445,6 +561,7 @@ class Navigator:
             elif not self._looked:
                 # Perhaps the way has just not been seen yet: look all around once, then try again.
                 self._looked, self._turned, self._last_yaw = True, 0.0, None
+                self._look_way, self._swept, self._looked_at = 1.0, (0.0, 0.0), -math.inf
                 self.state, self.note, self.path = "looking", "looking around", []
             else:
                 gi, gj = costmap.index(goal)
@@ -458,6 +575,7 @@ class Navigator:
                 self.state, self.note, self.path = "failed", f"planning failed: {e}", []
         finally:
             self._planning = False
+            self.plan_ms = (time.perf_counter() - began) * 1e3
 
     # --- following it ----------------------------------------------------------------------
 
@@ -503,12 +621,27 @@ class Navigator:
 
     def _wanted(self) -> tuple[float, float]:
         if self.state == "looking":
+            # Turn until the camera has looked all round: one way as far as there is room
+            # for the tail, then, if that was not all the way, back and round the other way.
             yaw = self.view.base_pose()[2]
             if self._last_yaw is not None:
-                self._turned += abs(world.wrap_angle(yaw - self._last_yaw))
+                self._turned += world.wrap_angle(yaw - self._last_yaw)   # (signed: where it faces now)
+                self._swept = (min(self._swept[0], self._turned), max(self._swept[1], self._turned))
             self._last_yaw = yaw
-            if self._turned < 2 * math.pi:
-                return 0.0, self.W_LOOK
+            if self._swept[1] - self._swept[0] < 2 * math.pi - self.SEES:
+                now = self.clock()
+                if now - self._looked_at > 1.5 and not self._planning:
+                    self._looked_at = now   # what is around, as the map has it now
+                    self._around()
+                x, y, _ = self.view.base_pose()
+                w = self._fits(x, y, yaw, 0.0, self._look_way * self.W_LOOK, now)[1]
+                if w != 0.0 or self._costmap is None:
+                    return 0.0, w if w != 0.0 else self._look_way * self.W_LOOK
+                self._tight_since = None
+                if self._look_way > 0:
+                    self._look_way = -1.0   # no room to turn further this way: the other way
+                    return 0.0, 0.0
+                # no room that way either: that was the look around
             if self.goal is None:
                 self.state, self.note = "arrived", ""
             else:
@@ -536,7 +669,7 @@ class Navigator:
         off = world.wrap_angle(math.atan2(ty - y, tx - x) - yaw)
         w = max(-W_MAX, min(W_MAX, 2.0 * off))
         if abs(off) > 0.45:
-            return 0.0, w  # turn on the spot first
+            return self._fits(x, y, yaw, 0.0, w, now)  # turn on the spot first
         v = V_MAX * (1 - abs(off) / 0.45) * min(1.0, 0.3 + math.hypot(gx - x, gy - y) / 0.5)
         # What the camera sees ahead has the last word.
         ahead, seen = self.view.ahead
@@ -563,4 +696,48 @@ class Navigator:
             self._blocked_since = None
             self.note = ""
             v *= min(1.0, max(0.25, (gap - STOP_GAP) / (SLOW_GAP - STOP_GAP)))
-        return v, w
+        return self._fits(x, y, yaw, v, w, now)
+
+    def _fits(self, x: float, y: float, yaw: float, v: float, w: float, now: float) -> tuple[float, float]:
+        """The move, if the base's whole outline stays clear of what is in the map during
+        the next half second of it; if not, the part of it that does (straight on without
+        the turn, or the turn without driving on); if neither, none.
+
+        A plan treats the base as a disc of half its width. That is right for driving
+        straight and wrong for turning, where the tail swings out. So a plan may ask for a
+        turn that there is no room for, and this is what stops it."""
+        costmap = self._costmap
+        if costmap is None or (v == 0.0 and w == 0.0):
+            return v, w
+        if v > 0:  # slower where it is tight
+            v *= max(0.4, min(1.0, (costmap.clear_at(x, y) - RADIUS + 0.04) / 0.14))
+
+        def worst(mv: float, mw: float) -> int:
+            most = 0
+            for t in (0.1, 0.2, 0.3, 0.4, 0.5):
+                a = yaw + mw * t
+                c, s = math.cos(yaw + mw * t / 2), math.sin(yaw + mw * t / 2)
+                px, py = x + mv * t * c, y + mv * t * s
+                ca, sa = math.cos(a), math.sin(a)
+                placed = OUTLINE @ np.array([[ca, sa], [-sa, ca]]) + (px, py)
+                most = max(most, costmap.touching(placed))
+            return most
+
+        c, s = math.cos(yaw), math.sin(yaw)
+        # (a map is never quite clean: what is inside the outline already does not count)
+        now_touching = costmap.touching(OUTLINE @ np.array([[c, s], [-s, c]]) + (x, y))
+        # (turning alone only counts as a way on if it is a turn worth the name)
+        moves = ((v, w), (v, 0.0)) + (((0.0, w),) if abs(w) > 0.1 else ()) if v > 0 else ((0.0, w),)
+        for move in moves:
+            if move != (0.0, 0.0) and worst(*move) <= now_touching:
+                self._tight_since = None
+                return move
+        if self.state == "looking":
+            return 0.0, 0.0
+        self.note = "no room to turn here" if v == 0.0 else "no room to go on"
+        if self._tight_since is None:
+            self._tight_since = now
+            self._plan()  # perhaps there is another way
+        elif now - self._tight_since > 8.0:
+            self.state, self.path = "failed", []
+        return 0.0, 0.0

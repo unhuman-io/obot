@@ -294,8 +294,9 @@ are still Python (`obot.ui.navigate`); they are the next to move.
 **Drive to a click**, then a click on the floor in the 3D view or on the **map from
 above** under it: the base drives there by itself. The map from above shows what stands
 on the floor (dark), the floor seen to be free (light), the margin around things in which
-the middle of the base cannot be (shaded), and the robot's footprint to scale. **Look around** turns it once on the spot, so that the camera has seen all there is
-to see from where it stands. **Stop**, or touching a controller, ends it at once.
+the middle of the base cannot be (shaded), and the robot's footprint to scale. **Look
+around** turns it on the spot until the camera has seen all round (one way as far as the
+tail has room, then the other way). **Stop**, or touching a controller, ends it at once.
 
 **Map by itself** sends the robot off to map its surroundings without being told where
 to go: it looks around, drives to the nearest edge of what it has seen, looks around
@@ -312,11 +313,18 @@ moves the map, and a double click shows all of it again.
 How it decides:
 
 - It only drives where it has *seen the floor to be free*, and keeps the middle of the
-  wheel axis 0.38 m from everything in the map and from floor it has not seen (the base
-  is 0.45 m wide: that leaves some 15 cm either side, less while it rounds something
-  whose far side it has not seen yet). A gap has to be 0.76 m wide to be driven. The
-  map starts empty, and the camera looks forward only, so at first that is a wedge in front
-  of the robot.
+  wheel axis 0.30 m from everything in the map and 0.32 m from floor it has not seen. The
+  base is 0.45 m wide at the wheels, so that is 7 cm either side, less a few for how well
+  it follows the plan. **A gap has to be about 0.65 m wide to be driven through.** The map
+  starts empty, and the camera looks forward only, so at first what it knows is a wedge in
+  front of the robot.
+- The base is not round: behind the wheels a narrow tail carries the caster, and swings
+  out 0.375 m when the base turns on the spot. A plan treats the base as a disc of half
+  its width, which is right for driving straight through a gap, and prefers places with
+  room to turn. Before every move the base's whole outline is checked against the map for
+  the next half second of it: a turn that the tail has no room for is not made. In a
+  passage too narrow to turn round in, the robot says "no room to turn here" (it does not
+  drive backwards, because the camera looks forwards).
 - To a place it has not seen a way to, it plans as if the unseen were free, drives the
   part of that way it has seen, and plans again from there with what the camera saw on
   the way. If there is nothing to drive, it looks around once; then it gives up and says
@@ -328,8 +336,8 @@ How it decides:
   (a depth camera cannot see what is right in front of it), or when no pictures arrive.
 
 What it does not do: it does not see what is lower than 5 cm, glass, or what is above the
-camera's view close by (a table top at 30 cm). The back of the base swings through 0.36 m
-when it turns on the spot, and nothing looks there. Keep a hand near a controller.
+camera's view close by (a table top at 30 cm). Its tail swings through 0.375 m when it
+turns on the spot, and nothing looks there: only what the map already has is avoided. Keep a hand near a controller.
 
 ### What the map remembers, and for how long
 

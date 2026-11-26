@@ -302,20 +302,33 @@ class WorldView:
         fading = free[~np.isin(free, standing)]
         things[fading] = np.maximum(0, things[fading].astype(np.int64) - self.DOWN)
 
+    def remembered(self) -> np.ndarray:
+        """The squares of the floor plan in which something is remembered to stand: (i, j)
+        each, the square reaching from (i * SEEN_CELL, j * SEEN_CELL)."""
+        if self.navd is not None:
+            return self.navd.things()
+        rows, columns = np.nonzero(self._things >= self.THERE)
+        return np.stack([columns, rows], axis=1) - self.SEEN_HALF
+
     def obstacles(self) -> np.ndarray:
         """Where the base cannot drive, (x, y) each: what stands there in the 3D map now, and
         what the floor plan remembers to stand there."""
         now = self.map.obstacles(*self.WAY_HEIGHT)
-        if self.navd is not None:
-            remembered = self.navd.things()
-        else:
-            rows, columns = np.nonzero(self._things >= self.THERE)
-            remembered = np.stack([columns, rows], axis=1) - self.SEEN_HALF
-        return np.concatenate([now, (remembered + 0.5) * self.SEEN_CELL])
+        remembered = self.remembered()
+        # Where the 3D map has the thing, it says where to 3 cm. What is only remembered is
+        # known to a square of 6 cm: all of the square counts (nine places, a voxel apart).
+        if len(now) and len(remembered):
+            # (a voxel is 3 cm wide: it is in every square that one of its corners is in)
+            corners = np.array([(-0.5, -0.5), (-0.5, 0.5), (0.5, -0.5), (0.5, 0.5)]) * self.map.voxel * 0.999
+            seen_now = np.floor((now[:, None, :] + corners[None]) / self.SEEN_CELL).astype(np.int64).reshape(-1, 2)
+            key = lambda squares: squares[:, 0] * 100_003 + squares[:, 1]  # noqa: E731
+            remembered = remembered[~np.isin(key(remembered.astype(np.int64)), key(seen_now))]
+        spread = np.array([(a, b) for a in (0.0, 0.5, 1.0) for b in (0.0, 0.5, 1.0)])
+        return np.concatenate([now, ((remembered[:, None, :] + spread[None]) * self.SEEN_CELL).reshape(-1, 2)])
 
     GRID_MAGIC = 0x3147424F  # "OBG1"
 
-    def grid(self, keep_clear: float = 0.38) -> bytes:
+    def grid(self, keep_clear: float = 0.29) -> bytes:
         """The map from above, for the page: what stands on the floor, where the floor has
         been seen to be free, and where the base cannot be for being too close to something.
 
@@ -365,7 +378,7 @@ class WorldView:
             out[a:b, c:d] = self._seen[j0 + a:j0 + b, i0 + c:i0 + d]
         return out
 
-    WAY_HALF_WIDTH = 0.26  # m: half the width of the base (0.22), and a little
+    WAY_HALF_WIDTH = 0.245  # m: half the width of the base (0.224), and a little
     WAY_HEIGHT = (0.05, 0.7)  # m above the floor: what is lower the wheels roll over
 
     def _look_ahead(self, camera: CameraConfig, points: np.ndarray, stamp: float,

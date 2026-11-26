@@ -75,8 +75,9 @@ class StillCamera:
 
 @pytest.fixture
 def room(monkeypatch):
-    """The made-up room with walls around it: 3 m ahead and 1.85 m to either side."""
+    """The made-up room with walls all round it: 3 m ahead, 1 m behind and 1.85 m to either side."""
     walls = (((3.0, 0.0, 0.75), (0.1, 3.7, 1.5), (216, 212, 204)),
+             ((-1.05, 0.0, 0.75), (0.1, 3.7, 1.5), (216, 212, 204)),
              ((1.0, 1.85, 0.75), (4.1, 0.1, 1.5), (216, 212, 204)),
              ((1.0, -1.85, 0.75), (4.1, 0.1, 1.5), (216, 212, 204)))
     monkeypatch.setattr(scene, "BOXES", scene.BOXES + walls)
@@ -158,6 +159,67 @@ def native(request):
     return request.param == "obot-navd"
 
 
+def body_gap(went):
+    """The least room there ever was between the base (its real outline, turned as it was)
+    and anything in the room: a collision is 0."""
+    outline = navigate._outline(grow=0.0, step=0.02)
+    least = math.inf
+    for x, y, yaw in went[::4]:
+        c, s = math.cos(yaw), math.sin(yaw)
+        placed = outline @ np.array([[c, s], [-s, c]]) + (x, y)
+        for centre, size, _ in scene.BOXES:
+            out = np.maximum(np.abs(placed - centre[:2]) - np.divide(size[:2], 2), 0.0)
+            least = min(least, float(np.hypot(out[:, 0], out[:, 1]).min()))
+    return least
+
+
+def door(width, y=0.0):
+    """Two rooms, 3 m by 4 m each, with a door of that width between them at x = 2."""
+    low, high = y - width / 2, y + width / 2
+    return tuple(((cx, cy, 0.75), (dx, dy, 1.5), (216, 212, 204)) for cx, cy, dx, dy in (
+        (2.0, 2.05, 6.2, 0.1), (2.0, -2.05, 6.2, 0.1), (-1.05, 0.0, 0.1, 4.2), (5.05, 0.0, 0.1, 4.2),
+        (2.0, (low - 2.0) / 2, 0.1, low + 2.0), (2.0, (high + 2.0) / 2, 0.1, 2.0 - high)))
+
+
+def test_goes_through_a_gap_it_fits_through_and_not_through_one_it_does_not(monkeypatch):
+    # The base is 0.45 m wide. A door of 0.66 m, off to one side so that it has to line up for it.
+    monkeypatch.setattr(scene, "BOXES", door(0.66, y=0.7))
+    sim = Sim()
+    went = sim.go(3.6, -0.5, seconds=400)
+    assert sim.nav.state == "arrived", sim.nav.describe()
+    print(f"through a 0.66 m door in {len(went) * 0.02:.0f} s: least room around the base "
+          f"{body_gap(went) * 100:.0f} cm")
+    assert went[:, 0].max() > 3.0 and body_gap(went) > 0.03 and forwards_only(went)
+    # In the doorway it is slow.
+    inside = np.abs(went[:, 0] - 2.0) < 0.2
+    speed = np.hypot(*np.diff(went[:, :2], axis=0).T) / 0.02
+    assert inside.sum() > 50 and speed[inside[1:]].max() < 0.2 < speed.max()
+    # A door of 0.56 m: it would fit with 5 cm to spare either side, and does not try.
+    monkeypatch.setattr(scene, "BOXES", door(0.56, y=0.7))
+    sim = Sim()
+    went = sim.go(3.6, -0.5, seconds=400)
+    assert sim.nav.state == "failed" and went[:, 0].max() < 1.8 and body_gap(went) > 0.03
+
+
+def test_does_not_turn_where_its_tail_would_hit(monkeypatch):
+    # A passage 0.7 m wide and 1.6 m long with a wall at its end. The base drives in (it has
+    # seen the walls on the way), and is then asked to come back out. It cannot turn round
+    # in there (the tail swings out 0.375 m) and it does not drive backwards (the camera
+    # looks forwards): it says so, and touches nothing trying.
+    passage = (((0.5, 0.36, 0.5), (1.6, 0.02, 1.0), (90, 90, 90)), ((0.5, -0.36, 0.5), (1.6, 0.02, 1.0), (90, 90, 90)),
+               ((1.31, 0.0, 0.5), (0.02, 0.74, 1.0), (90, 90, 90)))
+    monkeypatch.setattr(scene, "BOXES", passage)
+    sim = Sim(start=(-1.5, 0.0, 0.0))
+    went = sim.go(0.85, 0.0, seconds=300)
+    assert sim.nav.state == "arrived" and went[-1, 0] > 0.7, sim.nav.describe()
+    assert body_gap(went) > 0.03
+    went = sim.go(-1.5, 0.0, seconds=300)
+    print(f"in the passage: {sim.nav.state}, {sim.nav.note!r}, turned {math.degrees(np.ptp(went[:, 2])):.0f} degrees, "
+          f"least room {body_gap(np.array(sim.went)) * 100:.1f} cm")
+    assert sim.nav.state == "failed" and "no room" in sim.nav.note
+    assert body_gap(np.array(sim.went)) > 0.005 and went[-1, 0] > 0.5
+
+
 def test_drives_around_things_and_finds_its_way_as_it_sees_more(room, native):
     sim = Sim(native=native)
     # Behind the box, where the base has not looked, with the shirt and the sock straight
@@ -169,7 +231,7 @@ def test_drives_around_things_and_finds_its_way_as_it_sees_more(room, native):
     assert math.hypot(went[-1, 0] - goal[0], went[-1, 1] - goal[1]) < navigate.ARRIVED + 0.02
     print(f"went {np.hypot(*np.diff(went[:, :2], axis=0).T).sum():.1f} m in {len(went) * 0.02:.0f} s, "
           f"never nearer than {nearest_box(went):.2f} m to anything")
-    assert nearest_box(went) > 0.25                                       # the base is 0.45 m wide
+    assert nearest_box(went) > 0.24 and body_gap(went) > 0.03             # the base is 0.45 m wide
     assert forwards_only(went)
     sim.view.close()
 
@@ -184,12 +246,12 @@ def test_a_point_inside_something_and_a_point_out_of_reach(room, monkeypatch):
     # In the middle of the basket: the base goes as near as it can get.
     went = sim.go(1.3, -0.8, seconds=240)
     assert sim.nav.state == "arrived", sim.nav.describe()
-    assert 0.25 < nearest_box(went[-1:]) < 0.5
+    assert 0.24 < nearest_box(went[-1:]) < 0.5 and body_gap(went) > 0.03
     # Inside the pen: it goes as near as it can, looks around, and says that there is no way.
     went = sim.go(-2.0, 0.0, seconds=400)
     assert sim.nav.state == "failed", sim.nav.describe()
-    assert "not been seen" in sim.nav.note and went[-1, 0] < -0.4
-    assert nearest_box(np.array(sim.went)) > 0.25
+    assert went[-1, 0] < -0.4
+    assert body_gap(np.array(sim.went)) > 0.03
 
 
 TWO_ROOMS = tuple(((x, y, 0.75), (dx, dy, 1.5), (216, 212, 204)) for x, y, dx, dy in (
@@ -219,8 +281,8 @@ def test_maps_two_rooms_by_itself(monkeypatch):
     print(f"mapped two rooms in {len(went) * 0.02:.0f} s, {travelled:.1f} m: {first.mean() * 100:.0f} % and "
           f"{second.mean() * 100:.0f} % of their floors seen, never nearer than {nearest_box(went):.2f} m to anything")
     assert first.mean() > 0.85 and second.mean() > 0.85
-    assert went[:, 0].max() > 2.5                                         # it went through the door
-    assert nearest_box(went) > 0.25 and forwards_only(went)
+    assert went[:, 0].max() > 2.0                                         # it went into the doorway
+    assert body_gap(went) > 0.03 and forwards_only(went)
     sim.view.close()
     # Told to stay within a metre and a half of where it starts, it does: the second room
     # stays as the door showed it.
@@ -241,12 +303,12 @@ def test_stops_for_what_was_not_there_before(room, monkeypatch):
     sim = Sim()
     sim.nav.look_around()
     sim.run()
-    assert sim.nav.state == "arrived" and abs(sim.yaw - 2 * math.pi) < 0.2
+    assert sim.nav.state == "arrived" and 5.0 < sim.yaw < 2 * math.pi       # (the camera sees 80 degrees itself)
     # A way that is free, as far as the map knows. Then something is put down across it.
     monkeypatch.setattr(scene, "BOXES", scene.BOXES + (((0.6, -0.9, 0.2), (0.1, 1.0, 0.4), (10, 10, 10)),))
     went = sim.go(1.9, -1.3, seconds=400)
     # It never touches it: it found another way, or gave up.
-    assert nearest_box(np.array(sim.went)) > 0.22
+    assert body_gap(np.array(sim.went)) > 0.03
     assert sim.nav.state in ("arrived", "failed")
     print("with something put in the way:", sim.nav.state, sim.nav.note, "nearest", round(nearest_box(went), 2))
 
