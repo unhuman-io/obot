@@ -22,7 +22,8 @@
 #
 # Not set up here, and needed as well: in the repository's Actions settings, approval for
 # the workflows of all outside contributors, and a read-only default token.
-# Running it again is safe (it registers again, replacing the runner of the same name).
+# Running it again is safe: everything is written again; a runner that is registered stays so
+# (and then no token is needed).
 set -eu
 repository="${1:?usage: setup-runner.sh OWNER/REPO [runner name] < registration-token}"
 name="${2:-$(hostname)}"
@@ -30,7 +31,7 @@ version=2.338.2
 sha256=670adb2f268fe21dcbb58b3db0e0aa9d5b3bddfe2c651481336e561ff86de945   # linux-arm64, from the release notes
 user=ghrunner
 home=/var/lib/ghrunner
-read -r token
+read -r token || token=""
 [ "$(uname -m)" = aarch64 ] || { echo "this is for an aarch64 computer" >&2; exit 2; }
 
 id "$user" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$home" --shell /usr/sbin/nologin "$user"
@@ -120,8 +121,13 @@ fi
 systemctl daemon-reload
 systemctl enable -q --now obot-rig-firewall
 cd "$dir"
-runuser -u "$user" -- ./config.sh --unattended --replace --url "https://github.com/$repository" --token "$token" \
-    --name "$name" --labels obot-rig --no-default-labels --work _work
+if [ -f .runner ]; then
+    echo "already registered: left as it is (to register again, remove $dir first)"
+else
+    [ -n "$token" ] || { echo "a registration token on standard input is needed" >&2; exit 2; }
+    runuser -u "$user" -- ./config.sh --unattended --replace --url "https://github.com/$repository" \
+        --token "$token" --name "$name" --labels obot-rig --no-default-labels --work _work
+fi
 
 cat > /etc/systemd/system/obot-rig-runner.service <<UNIT
 [Unit]
