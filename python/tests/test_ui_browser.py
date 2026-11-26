@@ -122,3 +122,61 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
         await browser.close()
     await server.close()
     assert errors == []
+
+
+async def test_map_from_above_and_driving_to_a_click(robot, daemon):
+    ui = make_server(daemon)
+    ui.config.cameras.append(CameraConfig(name="low depth", source="scene:depth", width=320, height=240, fps=15,
+                                          xyz=(0.116, 0.0175, 0.143), rpy=(0.0, 0.0, 0.0)))
+    ui.config.world.stride = 2
+    server = TestServer(ui.app())
+    await server.start_server()
+    errors = []
+    async with playwright_api.async_playwright() as p:
+        try:
+            browser = await p.chromium.launch()
+        except Exception as e:
+            await server.close()
+            pytest.skip(f"chromium cannot start: {str(e).splitlines()[0]}")
+        page = await browser.new_page(viewport={"width": 1280, "height": 1400})
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        await page.goto(str(server.make_url("/")))
+
+        # The map from above appears and is drawn: free floor, things, and the robot on it.
+        await page.wait_for_function("window.obotPlan && window.obotPlan.grid && window.obotPlan.grid.width > 20 "
+                                     "&& window.obotPlan.pose && window.obotPlan.view", timeout=20000)
+        drawn = await page.evaluate("""() => {
+            const c = document.getElementById('plan');
+            const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+            let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
+            return n / (d.length / 4); }""")
+        assert drawn > 0.02
+
+        # Without "Drive to a click" a click on the map does nothing.
+        on_page = """([x, y]) => {
+            const p = window.obotPlan, g = p.grid, v = p.view;
+            const box = document.getElementById('plan').getBoundingClientRect();
+            return [box.left + (v.left + (x / g.cell - g.i0) * v.scale) / v.ratio,
+                    box.top + (v.top + (g.height - (y / g.cell - g.j0)) * v.scale) / v.ratio]; }"""
+        await page.locator("#plan").scroll_into_view_if_needed()
+        where = await page.evaluate(on_page, [0.4, -0.1])
+        await page.mouse.click(*where)
+        await page.wait_for_timeout(500)
+        assert ui.nav.state == "idle" and robot.state()["mode"] == RobotMode.IDLE
+
+        # With it: the robot is enabled and drives to where the click was.
+        await page.click("#nav-goto")
+        await page.locator("#plan").scroll_into_view_if_needed()
+        await page.mouse.click(*where)
+        await page.wait_for_function("document.getElementById('world-note').textContent.includes('arrived')",
+                                     timeout=40000)
+        at = robot.state()
+        assert ((at["odom_x"] - 0.4) ** 2 + (at["odom_y"] + 0.1) ** 2) ** 0.5 < 0.12
+        shot = os.environ.get("OBOT_UI_SCREENSHOT_MAP")
+        if shot:
+            await page.wait_for_timeout(1500)
+            await page.locator("#plan-section").screenshot(path=shot)
+        await browser.close()
+    await server.close()
+    assert not errors, errors

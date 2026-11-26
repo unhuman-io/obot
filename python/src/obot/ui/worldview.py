@@ -238,6 +238,39 @@ class WorldView:
         inside = (i >= 0) & (i <= 2 * self.SEEN_HALF) & (j >= 0) & (j <= 2 * self.SEEN_HALF)
         self._seen[j[inside], i[inside]] = True
 
+    GRID_MAGIC = 0x3147424F  # "OBG1"
+
+    def grid(self, keep_clear: float = 0.33) -> bytes:
+        """The map from above, for the page: what stands on the floor, where the floor has
+        been seen to be free, and where the base cannot be for being too close to something.
+
+        Layout (little endian): u32 magic; i32 i0, j0; u32 width, height; f32 cell size;
+        then height rows of width bytes, the square [j][i] reaching from ((i + i0) * cell,
+        (j + j0) * cell): 0 not seen, 1 free floor, 2 something there, 3 free but closer to
+        something than `keep_clear` (the middle of the base cannot be there)."""
+        import struct
+
+        import cv2  # here so that the rest of the module works without OpenCV
+
+        cell, half = self.SEEN_CELL, self.SEEN_HALF
+        occupied = np.zeros_like(self._seen)
+        things = self.map.obstacles(*self.WAY_HEIGHT)
+        if len(things):
+            index = np.floor(things / cell).astype(np.int64) + half
+            ok = np.all((index >= 0) & (index <= 2 * half), axis=1)
+            occupied[index[ok, 1], index[ok, 0]] = True
+        rows, columns = np.nonzero(self._seen | occupied)
+        if not len(rows):
+            return struct.pack("<IiiIIf", self.GRID_MAGIC, 0, 0, 0, 0, cell)
+        pad = int(0.5 / cell)
+        a, b = max(0, rows.min() - pad), min(2 * half, rows.max() + pad) + 1
+        c, d = max(0, columns.min() - pad), min(2 * half, columns.max() + pad) + 1
+        occupied, seen = occupied[a:b, c:d], self._seen[a:b, c:d]
+        distance = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+        near = distance * cell < keep_clear
+        cells = np.where(occupied, 2, np.where(seen, np.where(near, 3, 1), 0)).astype(np.uint8)
+        return struct.pack("<IiiIIf", self.GRID_MAGIC, c - half, a - half, d - c, b - a, cell) + cells.tobytes()
+
     def known(self, origin, shape) -> np.ndarray:
         """Which squares of a grid of SEEN_CELL have been seen to be free floor: the grid's
         square [j, i] reaches from ((i + origin[0]) * SEEN_CELL, (j + origin[1]) * SEEN_CELL)."""

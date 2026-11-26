@@ -116,6 +116,7 @@ class UiServer:
         app.router.add_get("/camera/{name}.jpg", self._jpeg)
         app.router.add_get("/api/model", self._model)
         app.router.add_get("/api/world", self._world)
+        app.router.add_get("/api/grid", self._grid)
         app.router.add_get("/model/{path:.*}", self._mesh)
         app.router.add_static("/static", STATIC)
         app.on_startup.append(self._start)
@@ -164,6 +165,13 @@ class UiServer:
         if not self.config.urdf or not os.path.isfile(self.config.urdf):
             raise web.HTTPNotFound(text="no robot model configured ([model] urdf = ...)")
         return web.json_response(model.load(self.config.urdf))
+
+    async def _grid(self, request: web.Request) -> web.Response:
+        """The map from above (see WorldView.grid)."""
+        if self.world is None:
+            raise web.HTTPNotFound(text="no depth camera configured")
+        body = await asyncio.get_running_loop().run_in_executor(None, self.world.grid)
+        return web.Response(body=body, content_type="application/octet-stream")
 
     async def _world(self, request: web.Request) -> web.Response:
         """What changed in the 3D map since the revision the page has (see WorldMap.delta)."""

@@ -247,6 +247,20 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         await asyncio.sleep(0.2)
         assert ui.nav.state == "idle"
 
+        # The map from above, as the page draws it: floor seen free, things, and the margin around them.
+        import struct
+
+        body = await (await client.get("/api/grid")).read()
+        magic, i0, j0, width, height, cell = struct.unpack_from("<IiiIIf", body)
+        cells = np.frombuffer(body, np.uint8, offset=24).reshape(height, width)
+        assert magic == 0x3147424F and cell == pytest.approx(0.06) and width > 30 and height > 30
+        assert (cells == 1).sum() > 200 and (cells == 2).sum() > 20 and (cells == 3).sum() > 50
+        here = robot.state()
+        i, j = int(here["odom_x"] / cell) - i0, int(here["odom_y"] / cell) - j0
+        assert cells[j, i] in (1, 3)                                     # where the base stands is free
+        box = cells[int(0.9 / cell) - j0, int(1.6 / cell) - i0 - 3: int(1.6 / cell) - i0 + 4]
+        assert 2 in box or 0 in box                                      # and the box is not
+
         await ws.send_json({"type": "world", "action": "save"})
         await asyncio.sleep(1.0)
     saved = list(tmp_path.glob("obot/map-*.npz"))

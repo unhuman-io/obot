@@ -54,6 +54,8 @@
   h2 .tools { float: right; text-transform: none; letter-spacing: 0; }
   h2 .tools button { padding: 1px 8px; font-size: 12px; margin-left: 4px; }
   #world-note { margin: 6px 0 0; font-size: 12px; }
+  #plan { display: block; width: 100%; height: 360px; border-radius: 6px; background: var(--bg); }
+  #plan.armed { cursor: crosshair; }
   .simcam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
   .simcam canvas { display: block; width: 100%; height: 100%; }
   #model canvas { display: block; border-radius: 6px; }
@@ -114,6 +116,10 @@
       </span></h2>
     <div id="model"></div>
     <p id="world-note" class="muted"></p>
+  </section>
+  <section id="plan-section" style="display:none">
+    <h2>Map from above</h2>
+    <canvas id="plan" title="Dark: something stands there. Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. With Drive to a click on, a click here sets where to go."></canvas>
   </section>
   <section>
     <h2>Plots</h2>
@@ -236,6 +242,7 @@ function showState(s) {
                         s.world.error ? "error: " + s.world.error : "", ...leveled].filter(Boolean).join(" · "));
   }
   if (s.nav !== undefined) showNav(s.nav);
+  if (s.odom) { plan.pose = inMap(s.odom); drawPlan(); }
   if (s.status) {
     text("operator", (s.status.cartesian ? "Cartesian mode  " : "") +
          (s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : ""));
@@ -325,11 +332,102 @@ function navNote() {
 function armNav(on) {
   navArmed = on;
   $("nav-goto").classList.toggle("active", on);
+  $("plan").classList.toggle("armed", on);
   if (window.obotModel && window.obotModel.onFloorClick) {
     window.obotModel.onFloorClick(on ? (x, y) => { send({ type: "nav", action: "goto", x, y }); armNav(false); } : null);
   }
 }
 $("nav-goto").addEventListener("click", () => armNav(!navArmed));
+
+// --- the map from above --------------------------------------------------------------------
+// Fetched once a second (see WorldView.grid for the layout); the robot, its way and where it
+// is going are drawn over it with every state.
+const plan = { grid: null, picture: document.createElement("canvas"), pose: null, view: null, busy: false };
+window.obotPlan = plan;
+async function pollPlan() {
+  if (plan.busy || document.hidden) return;
+  plan.busy = true;
+  try {
+    const response = await fetch("/api/grid" + location.search);
+    if (!response.ok) return;
+    const buffer = await response.arrayBuffer(), head = new DataView(buffer);
+    if (head.getUint32(0, true) !== 0x3147424F) return;
+    const grid = { i0: head.getInt32(4, true), j0: head.getInt32(8, true), width: head.getUint32(12, true),
+                   height: head.getUint32(16, true), cell: head.getFloat32(20, true) };
+    $("plan-section").style.display = "";
+    if (!grid.width || !grid.height) return;
+    const cells = new Uint8Array(buffer, 24), style = getComputedStyle(document.documentElement);
+    const shade = (name, alpha) => {
+      const probe = document.createElement("canvas").getContext("2d");
+      probe.fillStyle = style.getPropertyValue(name).trim() || "#888";
+      probe.fillRect(0, 0, 1, 1);
+      const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, alpha];
+    };
+    const colours = [[0, 0, 0, 0], shade("--panel", 255), shade("--ink", 235), shade("--muted", 70)];
+    plan.picture.width = grid.width;
+    plan.picture.height = grid.height;
+    const context = plan.picture.getContext("2d"), image = context.createImageData(grid.width, grid.height);
+    for (let j = 0; j < grid.height; j++) {
+      const row = (grid.height - 1 - j) * grid.width * 4;      // y up on the page
+      for (let i = 0; i < grid.width; i++) image.data.set(colours[cells[j * grid.width + i]] || colours[0], row + i * 4);
+    }
+    context.putImageData(image, 0, 0);
+    plan.grid = grid;
+    drawPlan();
+  } catch (e) { /* the next second will do */ } finally { plan.busy = false; }
+}
+function drawPlan() {
+  const canvas = $("plan"), grid = plan.grid;
+  if (!grid || !canvas.clientWidth) return;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * ratio;
+  canvas.height = canvas.clientHeight * ratio;
+  const context = canvas.getContext("2d");
+  const scale = Math.min(canvas.width / grid.width, canvas.height / grid.height);
+  const left = (canvas.width - grid.width * scale) / 2, top = (canvas.height - grid.height * scale) / 2;
+  // metres on the map <-> pixels of the canvas
+  const px = (x, y) => [left + (x / grid.cell - grid.i0) * scale, top + (grid.height - (y / grid.cell - grid.j0)) * scale];
+  plan.view = { scale, left, top, ratio };
+  context.imageSmoothingEnabled = false;
+  context.drawImage(plan.picture, left, top, grid.width * scale, grid.height * scale);
+  const style = getComputedStyle(document.documentElement);
+  const ok = style.getPropertyValue("--ok").trim() || "#2f9e44", accent = style.getPropertyValue("--accent").trim() || "#36c";
+  if (navLast && navLast.goal && ["planning", "driving", "looking"].includes(navLast.state)) {
+    context.strokeStyle = ok;
+    context.lineWidth = 2 * ratio;
+    context.beginPath();
+    if (plan.pose) context.moveTo(...px(plan.pose[0], plan.pose[1]));
+    for (const [x, y] of navLast.path) context.lineTo(...px(x, y));
+    context.stroke();
+    context.beginPath();
+    context.arc(...px(navLast.goal[0], navLast.goal[1]), 6 * ratio, 0, 2 * Math.PI);
+    context.stroke();
+  }
+  if (plan.pose) {
+    // the robot: its footprint to scale (0.45 m wide, the wheel axis 0.16 m behind the front), nose forward
+    const [x, y, yaw] = plan.pose, c = Math.cos(yaw), s = Math.sin(yaw);
+    const corner = (fx, fy) => px(x + c * fx - s * fy, y + s * fx + c * fy);
+    context.fillStyle = accent;
+    context.beginPath();
+    [[0.22, 0], [0.10, 0.22], [-0.34, 0.22], [-0.34, -0.22], [0.10, -0.22]].forEach(([fx, fy], k) => {
+      const [u, v] = corner(fx, fy);
+      if (k) context.lineTo(u, v); else context.moveTo(u, v);
+    });
+    context.closePath();
+    context.fill();
+  }
+}
+$("plan").addEventListener("click", (e) => {
+  if (!navArmed || !plan.grid || !plan.view) return;
+  const box = $("plan").getBoundingClientRect(), { scale, left, top, ratio } = plan.view, grid = plan.grid;
+  const u = (e.clientX - box.left) * ratio, v = (e.clientY - box.top) * ratio;
+  send({ type: "nav", action: "goto", x: ((u - left) / scale + grid.i0) * grid.cell,
+         y: (grid.height - (v - top) / scale + grid.j0) * grid.cell });
+  armNav(false);
+});
+setInterval(pollPlan, 1000);
+new ResizeObserver(drawPlan).observe($("plan"));
 $("nav-look").addEventListener("click", () => send({ type: "nav", action: "look" }));
 $("nav-stop").addEventListener("click", () => { armNav(false); send({ type: "nav", action: "cancel" }); });
 
