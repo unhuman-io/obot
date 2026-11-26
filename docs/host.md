@@ -261,18 +261,45 @@ color = "d435"                  # the camera whose picture colours the points
 voxel = 0.03
 range = 3.5
 max_voxels = 250000
+correct_odometry = true         # the cameras correct the wheel odometry, see below
 ```
 
 **Level to floor** on the page measures height and tilt of a base camera from the floor in
 its picture and shows the `xyz` and `rpy` to put in the configuration. Things to know:
 
-- The map is only as good as the odometry. Wheel slip shifts new sightings against old
-  ones; there is no correction from the pictures themselves (no SLAM) yet.
 - The fields of view are the D435's nominal ones, not the calibration stored in the
   camera, so sizes can be off by a few percent.
 - `obot ui --sim-cameras` (with `obot-rtd --sim`) shows all of this without a camera: the
   server draws depth and colour pictures of a small made-up room (`scene:depth`,
   `scene:color`).
+
+### The cameras correct the odometry
+
+The wheels say how the base moved from one moment to the next, and that drifts: wheels
+slip, and the track width and wheel radius are never exactly right. A depth camera on the
+base (one without `link`) puts that right. From each picture the page server takes what
+stands upright on the floor (walls, furniture, boxes), seen from above, and lays it over
+a floor plan of what it has seen before. Where the two differ, the robot is not where the
+wheels say. The difference is kept as a correction, which the 3D view, the map and the
+trail use; the "odometry" line on the page shows the corrected pose and by how much the
+wheels were corrected.
+
+What it does and does not do:
+
+- The floor plan keeps everything where it was first seen, so the robot's place is held
+  for as long as it sees something it has seen before. Driving a long way through new
+  surroundings and coming back by another way still adds up an error: there is no loop
+  closure. For one or a few rooms that does not matter; a building would need it.
+- Along a bare wall nothing says how far along the robot is. That direction is then left
+  to the wheels, and only the distance to the wall and the heading are corrected.
+- A comparison that disagrees with the wheels by more than 25 cm or 0.25 rad in one step
+  is not believed, and neither is one in which less than a third of the view is known.
+- It needs things standing within the camera's range (3.5 m). Facing an empty floor, the
+  wheels are on their own.
+- The correction lives in the page server. `obot-rtd`'s own odometry (`odom_x`, `odom_y`,
+  `odom_yaw` in the state) is the wheels alone, as before.
+- "Clear map" also clears the floor plan. `correct_odometry = false` under `[world]`
+  switches all of this off.
 
 ## Bringing up a real robot
 

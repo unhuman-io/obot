@@ -8,6 +8,10 @@ odometry is in (x forward, y left, z up, origin where the daemon started, floor 
 The map has history in both directions: a voxel stays after the camera has turned away, and
 a voxel the camera now sees *through* (the thing was picked up) is taken out again.
 
+What the cameras see also tells the robot where it is: what stands on the floor is kept as
+a floor plan (scan_2d, FloorPlan) and each new picture is laid over it, which corrects the
+wheel odometry for slipping wheels and a wrong track width.
+
 Frames. A camera's mount in the configuration is its body frame, as in a URDF: x is the
 viewing direction, y is left, z is up. Pictures are in the optical frame: x right, y down,
 z along the view. OPTICAL converts between the two.
@@ -47,6 +51,21 @@ def transform(xyz=(0, 0, 0), rpy=(0, 0, 0)) -> np.ndarray:
 
 def base_pose(x: float, y: float, yaw: float) -> np.ndarray:
     return transform((x, y, 0.0), (0.0, 0.0, yaw))
+
+
+def compose(a, b) -> tuple[float, float, float]:
+    """Planar poses (x, y, yaw): b, given in the frame a, in the frame a is given in."""
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return (a[0] + c * b[0] - s * b[1], a[1] + s * b[0] + c * b[1], a[2] + b[2])
+
+
+def inverse(a) -> tuple[float, float, float]:
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return (-c * a[0] - s * a[1], s * a[0] - c * a[1], -a[2])
+
+
+def wrap_angle(a: float) -> float:
+    return math.atan2(math.sin(a), math.cos(a))
 
 
 def invert(t: np.ndarray) -> np.ndarray:
@@ -173,6 +192,223 @@ def fit_floor(points: np.ndarray, tolerance: float = 0.015, rounds: int = 200, s
     pitch = -math.asin(max(-1.0, min(1.0, float(normal[0]))))
     roll = math.atan2(float(normal[1]), float(normal[2]))
     return height, roll, pitch, best_count / len(points)
+
+
+def scan_2d(points: np.ndarray, centre=(0.0, 0.0), step: float = 0.01, z_min: float = 0.10, z_max: float = 1.5,
+            min_height: float = 0.05) -> np.ndarray:
+    """What stands on the floor, seen from above, as a scan around `centre` (where the
+    camera is): from points in the base frame (x forward, y left, z up from the floor)
+    between z_min and z_max, one point (x, y) for each upright stretch of surface in each
+    direction, the directions being `step` radians apart.
+
+    Something upright is seen in one direction at one distance over a range of heights, at
+    least `min_height`; its points are averaged, which takes out most of a depth camera's
+    noise. That leaves out the floor and what hangs from the ceiling, and also everything
+    that lies flat (a table top, the top of a box): of a flat surface a camera sees rows,
+    and where those rows are depends on where the camera is, not on where the surface is."""
+    band = (points[:, 2] > z_min) & (points[:, 2] < z_max)
+    if not band.any():
+        return np.empty((0, 2))
+    xy, z = points[band, :2].astype(np.float64), points[band, 2].astype(np.float64)
+    dx, dy = xy[:, 0] - centre[0], xy[:, 1] - centre[1]
+    distance = np.hypot(dx, dy)
+    direction = np.rint(np.arctan2(dy, dx) / step).astype(np.int64)
+    order = np.lexsort((distance, direction))
+    direction, distance, xy, z = direction[order], distance[order], xy[order], z[order]
+    # A new stretch where the direction changes, or the distance jumps by more than the
+    # camera's noise (which grows with the square of the distance).
+    jump = np.diff(distance) > 0.06 + 0.02 * distance[:-1] ** 2
+    first = np.nonzero(np.r_[True, (direction[1:] != direction[:-1]) | jump])[0]
+    count = np.diff(np.r_[first, len(z)])
+    # Of each stretch, what is at about its middle distance: real things are not as neat as
+    # a wall (a shelf, a curtain, a skirting board in front of the wall).
+    middle = np.repeat(distance[first + count // 2], count)
+    core = np.abs(distance - middle) < 0.04 + 0.015 * middle ** 2
+    points = np.add.reduceat(core.astype(np.float64), first)
+    height = (np.maximum.reduceat(np.where(core, z, -np.inf), first)
+              - np.minimum.reduceat(np.where(core, z, np.inf), first))
+    upright = (points >= 3) & (height >= min_height)
+    total = np.stack([np.add.reduceat(xy[:, 0] * core, first), np.add.reduceat(xy[:, 1] * core, first)], axis=1)
+    return (total / np.maximum(points, 1)[:, None])[upright]
+
+
+def scan_surfaces(scan: np.ndarray, radius: float = 0.1) -> tuple[np.ndarray, np.ndarray]:
+    """The surfaces a scan (scan_2d) is of. For each scan point, from its neighbours within
+    `radius`: the direction across the surface it is part of (a unit vector, either way
+    round), and the point itself moved onto the line through those neighbours, which takes
+    out most of the depth camera's noise. Where the neighbours do not form a line (a lone
+    point, a corner) the direction is (0, 0) and the point is left where it is.
+    Returns (points, directions)."""
+    if not len(scan):
+        return np.empty((0, 2)), np.empty((0, 2))
+    offset = scan[:, None, :] - scan[None, :, :]
+    near = ((offset ** 2).sum(axis=2) < radius ** 2).astype(np.float64)
+    count = near.sum(axis=1)
+    mean = (near @ scan) / count[:, None]
+    xx = (near @ (scan[:, 0] ** 2)) / count - mean[:, 0] ** 2
+    yy = (near @ (scan[:, 1] ** 2)) / count - mean[:, 1] ** 2
+    xy = (near @ (scan[:, 0] * scan[:, 1])) / count - mean[:, 0] * mean[:, 1]
+    # the neighbours' spread: along the surface it is large, across it small
+    half_trace, root = (xx + yy) / 2, np.sqrt(((xx - yy) / 2) ** 2 + xy ** 2)
+    along, across = half_trace + root, half_trace - root
+    angle = 0.5 * np.arctan2(2 * xy, xx - yy)  # direction of the largest spread
+    normal = np.stack([-np.sin(angle), np.cos(angle)], axis=1)
+    normal *= ((count >= 4) & (across < 0.1 * along))[:, None]
+    return scan - normal * ((scan - mean) * normal).sum(axis=1)[:, None], normal
+
+
+def scan_normals(scan: np.ndarray, radius: float = 0.1) -> np.ndarray:
+    return scan_surfaces(scan, radius)[1]
+
+
+@dataclass
+class Match:
+    pose: tuple[float, float, float]  # where the scan fits the floor plan best
+    matched: int  # scan points that lie on something in the plan there
+    share: float  # ... as a share of the scan points that could be compared
+    directions: int  # of x, y and yaw, how many the plan pins down (a bare wall: 2)
+
+
+class FloorPlan:
+    """What stands on the floor, from above, where it was first seen: points (x, y) in the
+    map, each with the direction across the surface it is on, a point every 10 to 20 cm
+    along a wall.
+
+    It is what the robot finds its place by (match), so it must not move with the robot's
+    mistakes: a point, once in, stays where it is, and nothing new is added next to it.
+    A wall seen a second time from a slightly wrong place therefore lands *off* the plan,
+    by exactly the mistake, instead of thickening it.
+    """
+
+    def __init__(self, spacing: float = 0.05):
+        self.spacing = spacing
+        self.points = np.empty((0, 2))
+        self.normals = np.empty((0, 2))
+        self._cells: dict[tuple[int, int], int] = {}  # one point per spacing-sized square
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+    ACROSS, ALONG = 0.10, 0.10  # m: nearer than this to a point of the plan is the same surface
+
+    def add(self, points: np.ndarray, normals: np.ndarray) -> int:
+        """Put in the points (map frame, with the direction across their surface) that are
+        not on a surface the plan already has there: within ACROSS of one of its points
+        across that point's surface, within ALONG along it, and facing the same way.
+        Returns how many were new."""
+        size = self.spacing
+        have, facing = self.points.tolist(), self.normals.tolist()
+        before = len(have)
+        for (x, y), (nx, ny) in zip(np.asarray(points).tolist(), np.asarray(normals).tolist(), strict=True):
+            i, j = math.floor(x / size), math.floor(y / size)
+            taken = (i, j) in self._cells or (nx == 0 and ny == 0)  # (no surface to speak of: not for the plan)
+            for di in (0, -1, 1, -2, 2):
+                if taken:
+                    break
+                for dj in (0, -1, 1, -2, 2):
+                    at = self._cells.get((i + di, j + dj))
+                    if at is None:
+                        continue
+                    (qx, qy), (mx, my) = have[at], facing[at]
+                    across, along = (x - qx) * mx + (y - qy) * my, (y - qy) * mx - (x - qx) * my
+                    if abs(across) < self.ACROSS and abs(along) < self.ALONG and abs(nx * mx + ny * my) > 0.8:
+                        taken = True
+                        break
+            if not taken:
+                self._cells[(i, j)] = len(have)
+                have.append([x, y])
+                facing.append([nx, ny])
+        if len(have) > before:
+            self.points, self.normals = np.asarray(have, np.float64), np.asarray(facing, np.float64)
+        return len(have) - before
+
+    def _nearest(self, centre, half: float):
+        """For looking up the plan's nearest point around `centre`: (index[iy, ix] of the
+        nearest point for every spacing-sized square within `half`, (ix0, iy0))."""
+        import cv2  # here so that the rest of the module works without OpenCV
+
+        n = int(half / self.spacing)
+        ix0, iy0 = math.floor(centre[0] / self.spacing) - n, math.floor(centre[1] / self.spacing) - n
+        ix = np.floor(self.points[:, 0] / self.spacing).astype(np.int64) - ix0
+        iy = np.floor(self.points[:, 1] / self.spacing).astype(np.int64) - iy0
+        inside = np.nonzero((ix >= 0) & (ix <= 2 * n) & (iy >= 0) & (iy <= 2 * n))[0]
+        if not len(inside):
+            return None, (ix0, iy0)
+        empty = np.ones((2 * n + 1, 2 * n + 1), np.uint8)
+        empty[iy[inside], ix[inside]] = 0
+        _, label = cv2.distanceTransformWithLabels(empty, cv2.DIST_L2, cv2.DIST_MASK_PRECISE,
+                                                   labelType=cv2.DIST_LABEL_PIXEL)
+        which = np.zeros(int(label.max()) + 1, np.int64)
+        which[label[iy[inside], ix[inside]]] = inside
+        return which[label], (ix0, iy0)
+
+    def match(self, scan: np.ndarray, normals: np.ndarray, guess, reach: float = 0.3,
+              iterations: int = 12) -> tuple[Match | None, np.ndarray]:
+        """Lay a scan (scan_surfaces of a scan_2d, in the base frame) over the plan, starting
+        from the pose `guess` = (x, y, yaw) of the base.
+
+        Each scan point is compared with the plan's point nearest to it, if that is within
+        `reach` and on a surface facing the same way, and only *across* that surface: along
+        a wall one stretch is like the next, so there is nothing to compare. Far points
+        count for less (a depth camera's error grows with the square of the distance).
+        Directions in which the plan does not hold the scan (along a bare wall) are left as
+        guessed.
+
+        Returns (the match, or None if nothing of the scan is near anything in the plan;
+        which scan points have nothing of the plan within reach: they are new)."""
+        new = np.ones(len(scan), bool)
+        usable = np.any(normals != 0, axis=1)
+        if not len(self.points) or usable.sum() < 3:
+            return None, new
+        nearest, (ix0, iy0) = self._nearest(guess[:2], float(np.abs(scan).max()) + reach + 2 * self.spacing)
+        if nearest is None:
+            return None, new
+        height, width = nearest.shape
+        px, py = scan[:, 0], scan[:, 1]
+        distance2 = px ** 2 + py ** 2
+        certain = 1.0 / (1.0 + (0.4 * distance2) ** 2)  # 1 cm close by, 4 cm at 3 m
+        tolerance = 0.03 / np.sqrt(certain)  # how far off a point may be and still be the same thing
+
+        def look(pose):
+            c, s = math.cos(pose[2]), math.sin(pose[2])
+            wx, wy = pose[0] + c * px - s * py, pose[1] + s * px + c * py
+            gx = np.floor(wx / self.spacing).astype(np.int64) - ix0
+            gy = np.floor(wy / self.spacing).astype(np.int64) - iy0
+            inside = (gx >= 0) & (gx < width) & (gy >= 0) & (gy < height)
+            at = nearest[np.clip(gy, 0, height - 1), np.clip(gx, 0, width - 1)]
+            qx, qy = self.points[at, 0], self.points[at, 1]
+            nx, ny = self.normals[at, 0], self.normals[at, 1]
+            near = inside & ((wx - qx) ** 2 + (wy - qy) ** 2 < reach ** 2)
+            # the same way round as the scan point's own surface?
+            facing = (c * normals[:, 0] - s * normals[:, 1]) * nx + (s * normals[:, 0] + c * normals[:, 1]) * ny
+            across = nx * (wx - qx) + ny * (wy - qy)
+            turn = nx * (-s * px - c * py) + ny * (c * px - s * py)  # change of `across` with yaw
+            return across, np.stack([nx, ny, turn], axis=1), near, near & usable & (np.abs(facing) > 0.8)
+
+        pose = [float(v) for v in guess]
+        directions = 0
+        for _ in range(iterations):
+            across, jacobian, _, comparable = look(pose)
+            if comparable.sum() < 3:
+                break
+            weight = comparable * certain / (1 + (across / tolerance) ** 2)
+            hessian = (jacobian * weight[:, None]).T @ jacobian
+            gradient = jacobian.T @ (weight * across)
+            strength, axes = np.linalg.eigh(hessian)
+            held = strength > 0.03 * weight.sum()  # a direction that a share of the points pulls in
+            directions = int(held.sum())
+            if not directions:
+                break
+            step = -axes[:, held] @ ((axes[:, held].T @ gradient) / strength[held])
+            pose = [pose[0] + step[0], pose[1] + step[1], pose[2] + step[2]]
+            if abs(step[0]) + abs(step[1]) < 1e-4 and abs(step[2]) < 1e-4:
+                break
+        across, _, near, comparable = look(pose)
+        new = ~near
+        if not comparable.any():
+            return None, new
+        matched = int((comparable & (np.abs(across) < tolerance)).sum())
+        return Match((pose[0], pose[1], pose[2]), matched, matched / int(usable.sum()), directions), new
 
 
 _OFFSET = 32768

@@ -114,3 +114,4 @@ color = "d435"                # colours the 3D points
 voxel = 0.03                  # m: size of a map cell
 range = 3.5                   # m: farther readings are not used
 max_voxels = 250000
+correct_odometry = true       # the depth camera corrects the wheel odometry (docs/host.md)

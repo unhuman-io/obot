@@ -236,6 +236,8 @@ def test_world_view_maps_the_room_while_the_robot_moves():
         # The trail is the way driven.
         trail = WorldMap.decode(view.map.delta())["trail"]
         assert trail[0].tolist() == [0.0, 0.0] and trail[-1].tolist() == pytest.approx([0.6, 0.0])
+        # The odometry was exact, and comparing the pictures with the map left it alone.
+        assert view.match["plan"] > 10 and view.correction == (0.0, 0.0, 0.0)
         # While turning fast, pictures are not used.
         view.update_pose(0.6, 0.0, 0.7, 2.0)
         before = view.cameras["room depth"].raw()[0]
@@ -371,3 +373,214 @@ def test_a_camera_on_the_arm_moves_with_the_joints():
     bad.cameras = [CameraConfig(name="d", source="scene:depth", link="no_such_link")]
     with pytest.raises(ValueError, match="no_such_link"):
         WorldView(bad, {"d": None})
+
+
+# --- the map corrects the odometry -----------------------------------------------------------
+
+
+def walls_seen_from(true, walls, rng):
+    """What points on walls (x, y), 1 m tall, look like from the base at the pose `true`,
+    with 1 cm of noise: a scan and its normals."""
+    w = np.asarray(walls) + rng.normal(0, 0.01, (len(walls), 2))
+    back = world.inverse(true)
+    c, s = math.cos(back[2]), math.sin(back[2])
+    x, y = back[0] + c * w[:, 0] - s * w[:, 1], back[1] + s * w[:, 0] + c * w[:, 1]
+    local = np.concatenate([np.stack([x, y, np.full(len(w), z)], axis=1) for z in (0.2, 0.5, 0.8)])
+    return world.scan_surfaces(world.scan_2d(local))
+
+
+def test_scan_keeps_what_stands_and_drops_what_lies_flat():
+    wall = [(1.0, y, z) for y in np.arange(-0.5, 0.5, 0.01) for z in np.arange(0.0, 2.0, 0.05)]
+    table = [(x, y, 0.7) for x in np.arange(0.2, 0.8, 0.01) for y in np.arange(-0.3, 0.3, 0.01)]
+    scan = world.scan_2d(np.array(wall + table))
+    assert len(scan) > 25 and np.allclose(scan[:, 0], 1.0, atol=0.001)     # the wall, not the table or the floor
+    normals = world.scan_normals(scan)
+    middle = np.abs(scan[:, 1]) < 0.3
+    assert np.allclose(np.abs(normals[middle]), (1.0, 0.0), atol=0.05)     # across the wall is along x
+    assert world.scan_normals(np.array([(0.0, 0.0), (1.0, 1.0), (2.0, 0.5)])).tolist() == [[0, 0]] * 3   # lone points
+
+
+def test_floor_plan_match_finds_the_pose_and_leaves_alone_what_it_cannot_tell():
+    pytest.importorskip("cv2")
+    rng = np.random.default_rng(1)
+    # A corner of two walls: one ahead at x = 2, one to the left at y = 1.5.
+    ahead = [(2.0, y) for y in np.arange(-1.0, 1.0, 0.005)]
+    corner = ahead + [(2.0, y) for y in np.arange(1.0, 1.5, 0.005)] + [(x, 1.5) for x in np.arange(0.8, 2.0, 0.005)]
+    plan = world.FloorPlan()
+    scan, normals = walls_seen_from((0.0, 0.0, 0.0), corner, rng)
+    assert 25 < plan.add(scan, normals) < 60                            # 4.2 m of wall, a point every 10 to 20 cm
+    assert plan.add(scan, normals) == 0                                 # nothing goes in twice,
+    other = world.FloorPlan()
+    other.add(scan, normals)
+    for shift in ((0.02, 0.02), (-0.03, 0.03), (0.04, -0.01)):          # nor next to what is there (bar a wall's end):
+        assert other.add(scan + shift, normals) <= 1                    # the same wall seen from a wrong place
+    assert other.add(scan + (0.3, 0.0), normals) > 15                   # but another wall 30 cm behind does
+
+    # Both walls in view: the pose is found from 15 cm and 7 degrees off, to a centimetre.
+    true = (0.3, 0.1, 0.2)
+    for guess in ((0.22, 0.17, 0.26), (0.18, 0.2, 0.1), true):
+        found, new = plan.match(*walls_seen_from(true, corner, rng), guess)
+        assert found.directions == 3 and found.share > 0.9 and not new.any()
+        assert found.pose[:2] == pytest.approx(true[:2], abs=0.006)
+        assert found.pose[2] == pytest.approx(true[2], abs=0.004)
+
+    # Only the wall ahead: the distance to it and the heading are found; where along the
+    # wall the robot is cannot be told, and stays as guessed.
+    guess = (0.22, 0.17, 0.26)
+    found, _ = plan.match(*walls_seen_from(true, ahead, rng), guess)
+    assert found.directions == 2
+    assert found.pose[0] == pytest.approx(true[0], abs=0.015) and found.pose[2] == pytest.approx(true[2], abs=0.006)
+    along = math.hypot(found.pose[0] - guess[0], found.pose[1] - guess[1])
+    assert found.pose[1] == pytest.approx(guess[1], abs=0.02), along
+
+    # Something the plan does not have (a wall 1 m nearer): nothing to hold on to, all new.
+    nearer = [(1.0, y) for y in np.arange(-0.5, 0.5, 0.005)]
+    found, new = plan.match(*walls_seen_from((0.0, 0.0, 0.0), nearer, rng), (0, 0, 0))
+    assert found is None and new.all()
+    # The stretch of a wall that has just come into view, beyond where the plan's ends, is
+    # next to what the plan has, not misplaced along it: the pose stays.
+    longer = [(2.0, y) for y in np.arange(-1.6, 1.0, 0.005)]
+    found, new = plan.match(*walls_seen_from(true, longer, rng), true)
+    assert found.pose[1] == pytest.approx(true[1], abs=0.01) and found.pose[2] == pytest.approx(true[2], abs=0.006)
+    assert 0 < new.sum() < len(new)
+
+
+@pytest.fixture
+def walled_room(monkeypatch):
+    """The made-up room with walls around it, 3 m ahead and 1.8 m to either side: what a
+    camera near the floor sees of a real room."""
+    from obot.ui import scene
+
+    walls = (((3.0, 0.0, 0.75), (0.1, 3.7, 1.5), (216, 212, 204)),
+             ((1.0, 1.85, 0.75), (4.1, 0.1, 1.5), (216, 212, 204)),
+             ((1.0, -1.85, 0.75), (4.1, 0.1, 1.5), (216, 212, 204)))
+    monkeypatch.setattr(scene, "BOXES", scene.BOXES + walls)
+
+
+class StillCamera:
+    """A depth camera for WorldView whose pictures the test draws."""
+
+    def __init__(self):
+        self.stamp, self.depth = 0.0, None
+
+    def raw(self):
+        return self.stamp, self.depth
+
+
+def drive(view, camera, config, steps, odometry_of):
+    """Take the robot through the true poses `steps` in the made-up room: at each, the
+    wheels report odometry_of(pose) and the depth camera a picture from where it really is."""
+    from obot.ui import scene
+
+    c = config.cameras[0]
+    mount = world.transform(c.xyz, c.rpy) @ world.OPTICAL
+    for true in steps:
+        view.update_pose(*odometry_of(true), 0.0)
+        camera.depth = scene.render(world.base_pose(*true) @ mount, c.intrinsics())[0]
+        camera.stamp = time.monotonic()
+        assert view.step() == 1
+
+
+def base_camera_config(correct: bool = True) -> ToolsConfig:
+    config = ToolsConfig()
+    # as on the robot: 14 cm above the floor, level, facing forward
+    config.cameras = [CameraConfig(name="d435_depth", source="realsense:depth", width=320, height=240,
+                                   xyz=(0.116, 0.0175, 0.143), rpy=(0.0, 0.0, 0.0), latency=0.0)]
+    config.world.stride = 2
+    config.world.correct_odometry = correct
+    return config
+
+
+def test_the_map_corrects_wheels_that_misreport_the_way(walled_room):
+    pytest.importorskip("cv2")
+    from obot.ui.worldview import WorldView
+
+    # 0.9 m forward, a turn of 0.5 rad to the left, 0.4 m on. The wheels report 6 % more
+    # distance and 12 % more turning than there was (slip, a wrong track width).
+    steps = [(x, 0.0, 0.0) for x in np.arange(0, 0.9001, 0.02)]
+    steps += [(0.9, 0.0, yaw) for yaw in np.arange(0.02, 0.5001, 0.02)]
+    steps += [(0.9 + d * math.cos(0.5), d * math.sin(0.5), 0.5) for d in np.arange(0.02, 0.4001, 0.02)]
+
+    travelled = {"d": 0.0, "last": steps[0]}
+
+    def wheels(true):
+        last = travelled["last"]
+        travelled["d"] += math.hypot(true[0] - last[0], true[1] - last[1])
+        travelled["last"] = true
+        yaw = 1.12 * true[2]
+        if true[2] == 0.0:
+            return (1.06 * true[0], 0.0, 0.0)
+        if true[:2] == (0.9, 0.0):
+            return (1.06 * 0.9, 0.0, yaw)
+        d = 1.06 * (travelled["d"] - 0.9)
+        return (1.06 * 0.9 + d * math.cos(1.12 * 0.5), d * math.sin(1.12 * 0.5), 1.12 * 0.5)
+
+    def error(pose):
+        true = steps[-1]
+        return math.hypot(pose[0] - true[0], pose[1] - true[1]), abs(pose[2] - true[2])
+
+    results = {}
+    for correct in (True, False):
+        travelled.update(d=0.0, last=steps[0])
+        config = base_camera_config(correct)
+        camera = StillCamera()
+        view = WorldView(config, {"d435_depth": camera})
+        drive(view, camera, config, steps, wheels)
+        results[correct] = (error(view.base_pose()), view)
+    (off, turned), view = results[True]
+    (raw_off, raw_turned), raw_view = results[False]
+    print(f"with the map: {off * 100:.1f} cm, {math.degrees(turned):.2f} deg off; "
+          f"wheels alone: {raw_off * 100:.1f} cm, {math.degrees(raw_turned):.2f} deg")
+    # The wheels alone end up 7 cm and 3.4 degrees from where the robot is; with the map it
+    # is within 2 cm and half a degree.
+    assert raw_view.correction == (0.0, 0.0, 0.0)
+    assert raw_off > 0.06 and raw_turned > 0.05
+    assert off < 0.02 and turned < 0.009
+    assert view.match["used"] and view.match["share"] > 0.5
+    # And the map is of the room as it is: the basket's near face is where the basket is
+    # (x = 1.14), not smeared towards where the wheels put it.
+    for which, limit in ((view, 0.03), (raw_view, None)):
+        centres, _ = which.map.points()
+        face = centres[(np.abs(centres[:, 1] + 0.8) < 0.1) & (centres[:, 2] > 0.1) & (centres[:, 0] < 1.3)]
+        spread = float(np.abs(face[:, 0] - 1.14).max())
+        if limit is not None:
+            assert len(face) > 20 and spread < limit + 0.03
+    # The trail is of the corrected way.
+    trail = WorldMap.decode(view.map.delta())["trail"]
+    assert math.hypot(trail[-1][0] - steps[-1][0], trail[-1][1] - steps[-1][1]) < 0.05
+
+
+def test_wheels_turning_in_the_air_do_not_move_the_robot_in_the_map(walled_room):
+    pytest.importorskip("cv2")
+    from obot.ui.worldview import WorldView
+
+    config = base_camera_config()
+    camera = StillCamera()
+    view = WorldView(config, {"d435_depth": camera})
+    count = {"n": 0}
+
+    def wheels(true):
+        count["n"] += 1
+        n = max(0, count["n"] - 5)                                   # a few pictures first, to have a map
+        return (0.01 * n, 0.0, 0.005 * n)                           # then 1 cm and 0.3 degrees per picture
+
+    drive(view, camera, config, [(0.0, 0.0, 0.0)] * 65, wheels)
+    x, y, yaw = view.base_pose()
+    print(f"wheels in the air: map pose {x * 100:.1f} cm, {y * 100:.1f} cm, {math.degrees(yaw):.2f} deg")
+    # The wheels say 0.6 m and 17 degrees. The robot has not moved, and the map agrees.
+    assert view._pose_at(None)[1] == pytest.approx(0.6)
+    assert math.hypot(x, y) < 0.04 and abs(yaw) < 0.02
+
+
+def test_nothing_to_compare_with_leaves_the_odometry_alone():
+    pytest.importorskip("cv2")
+    from obot.ui.worldview import WorldView
+
+    config = base_camera_config()
+    camera = StillCamera()
+    view = WorldView(config, {"d435_depth": camera})
+    # Facing away from everything in the room: only floor in view.
+    drive(view, camera, config, [(-x, 0.0, math.pi) for x in np.arange(0, 0.3, 0.02)], lambda true: true)
+    assert view.correction == (0.0, 0.0, 0.0)
+    assert view.match == {"scan": 0, "used": False, "plan": 0}
+    assert len(view.map) > 500                                       # the floor was mapped all the same

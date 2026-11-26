@@ -209,13 +209,26 @@ function showInfo(next) {
   }));
 }
 
+// Where the wheels say the robot is, moved to where the cameras found it in the map
+// (world.correction: the pose of the wheels' frame in the map's).
+let odomCorrection = [0, 0, 0];
+function inMap(odom) {
+  const c = Math.cos(odomCorrection[2]), sn = Math.sin(odomCorrection[2]);
+  return [odomCorrection[0] + c * odom[0] - sn * odom[1], odomCorrection[1] + sn * odom[0] + c * odom[1],
+          odom[2] + odomCorrection[2]];
+}
+
 function showState(s) {
-  if (window.obotModel && s.q) window.obotModel.setJoints(info.joints, s.q, s.odom);
+  if (s.world && s.world.correction) odomCorrection = s.world.correction;
+  if (window.obotModel && s.q) window.obotModel.setJoints(info.joints, s.q, s.odom ? inMap(s.odom) : s.odom);
   if (window.obotModel && window.obotModel.world && s.world) {
     window.obotModel.world.setCameras(s.world.cameras);
     const leveled = Object.entries(s.world.leveled || {}).map(([name, r]) => name + ": " + (r.error ? r.error :
       "xyz = [" + r.xyz.join(", ") + "], rpy = [" + r.rpy.join(", ") + "] (put these in the configuration to keep them)"));
-    text("world-note", [s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update",
+    const m = s.world.match || {};
+    const seen = !("scan" in m) ? "" : m.used ? "cameras agree with the map (" + Math.round(m.share * 100) + " % of the view)" :
+      m.share === undefined ? "cameras: nothing known in view" : "cameras: view not matched";
+    text("world-note", [s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update", seen,
                         s.world.error ? "error: " + s.world.error : "", ...leveled].filter(Boolean).join(" · "));
   }
   if (s.status) {
@@ -252,7 +265,10 @@ function showState(s) {
     }
   });
   text("base", fmt(s.base_v) + " m/s, " + fmt(s.base_omega) + " rad/s");
-  text("odom", "x " + fmt(s.odom[0]) + "  y " + fmt(s.odom[1]) + "  yaw " + fmt(s.odom[2] * 180 / Math.PI, 0) + "°");
+  const where = inMap(s.odom), shift = Math.hypot(odomCorrection[0], odomCorrection[1]);
+  text("odom", "x " + fmt(where[0]) + "  y " + fmt(where[1]) + "  yaw " + fmt(where[2] * 180 / Math.PI, 0) + "°" +
+    (shift > 0.005 || Math.abs(odomCorrection[2]) > 0.002 ? "  (wheels corrected by " + fmt(shift) + " m, " +
+      fmt(odomCorrection[2] * 180 / Math.PI, 1) + "°)" : ""));
   const volts = s.bus_voltage.filter((v) => v !== null);
   text("voltage", volts.length ? fmt(Math.min(...volts), 1) + " V" : "-");
   text("loop", "late " + fmt(s.wake_latency_us, 0) + " µs, cycle " + fmt(s.exec_us, 0) + " µs, overruns " + s.overruns);
