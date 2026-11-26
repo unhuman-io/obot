@@ -116,7 +116,7 @@ TEST_CASE("a full map forgets what it has not seen for longest") {
         map.integrate(points.data(), nullptr, 100);
         CHECK(map.size() == (row < 10 ? 100u * (row + 1) : 1000u));  // the eleventh makes it too many: the oldest goes
     }
-    const auto left = map.obstacles(-1, 1);
+    const auto left = map.obstacles(-1, 1, 1);
     CHECK(left.size() == 1000);
     CHECK(left.front().second == 20);  // the first two rows have gone (rows are 10 voxels apart)
     const float one[] = {0.0f, 3.0f, 0.0f};
@@ -149,7 +149,8 @@ TEST_CASE("the trail, clearing, and keeping a map") {
     CHECK(used == saved.size());
     CHECK(again.shown() == 1);
     CHECK(decode(again.delta(0, 0, 0)).trail.size() == 34);
-    CHECK(again.obstacles(0.05, 0.7) == std::vector<std::pair<int, int>>{{33, 67}});
+    CHECK(again.obstacles(0.05, 0.7, 1) == std::vector<std::pair<int, int>>{{33, 67}});
+    CHECK(again.obstacles(0.05, 0.7).empty());  // seen once: not something to plan a way around yet
     VoxelMap other(0.05);
     used = 0;
     CHECK_FALSE(other.restore(saved.data(), saved.size(), used));  // cells of another size
@@ -282,7 +283,9 @@ TEST_CASE("the map from above: things, free floor, and the margin around things"
         box.insert(box.end(), {1.0f, 0.0f, z});
     }
     box.insert(box.end(), {0.5f, 0.5f, 0.0f});  // (floor: not a thing)
-    map.integrate(box.data(), nullptr, box.size() / 3);
+    for (int seen = 0; seen < 4; seen++) {      // (often enough to be sure of it)
+        map.integrate(box.data(), nullptr, box.size() / 3);
+    }
     floor.stand(0.0, 0.0, 1.5);
     const std::vector<uint8_t> grid = floor.grid(map, way, 0.38);
     uint32_t magic, width, height;

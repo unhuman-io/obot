@@ -29,6 +29,11 @@ from . import native as native_map
 # over V4L2: turning on the spot, the pictures line up best with the wheels 50 ms earlier
 # (clearly better than 35 or 65 ms).
 DEFAULT_LATENCY_S = 0.05
+# A camera that says when each picture was taken (the kernel's stamp, "start of exposure")
+# is still not quite believed: turning on the spot six times, the D435's depth pictures line
+# up best with the wheels 30 to 40 ms before that stamp (10 600 cells of map, against 12 700
+# with the stamp as it is).
+CAPTURE_DELAY_S = 0.035
 
 
 class WorldView:
@@ -115,24 +120,37 @@ class WorldView:
 
     # --- where things are --------------------------------------------------------------------
 
-    def update_pose(self, x: float, y: float, yaw: float, yaw_rate: float, q=None) -> None:
+    def update_pose(self, x: float, y: float, yaw: float, yaw_rate: float, q=None, t: float | None = None) -> None:
         """Called with every state the page server reads; q are the joint angles in the
-        order of joint_names (only looked at if a camera is on a link of the arm)."""
+        order of joint_names (only looked at if a camera is on a link of the arm); t is
+        when the state was true (on the cameras' clock; default: now)."""
         q = np.array(q, np.float32) if self._on_links and q is not None else None
         with self._lock:
-            self._poses.append((self.clock(), x, y, yaw, yaw_rate, q))
+            if t is None or (self._poses and t <= self._poses[-1][0]):
+                t = self.clock()
+            self._poses.append((t, x, y, yaw, yaw_rate, q))
         here = world.compose(self.correction, (x, y, yaw))
         self.map.add_pose(here[0], here[1])   # (obot-navd notes where the base stands with it)
         if self.navd is None:
             self._stand(here[0], here[1])
 
     def _pose_at(self, t: float | None):
+        """(time, x, y, yaw, yaw rate, joint angles) of the odometry at time t (None: now),
+        between the two states it was read at before and after."""
         with self._lock:
             if not self._poses:
                 return (0.0, 0.0, 0.0, 0.0, 0.0, None)
-            if t is None:
+            if t is None or t >= self._poses[-1][0]:
                 return self._poses[-1]
-            return min(self._poses, key=lambda sample: abs(sample[0] - t))
+            after = next((k for k, sample in enumerate(self._poses) if sample[0] >= t), 0)
+            if after == 0:
+                return self._poses[0]
+            a, b = self._poses[after - 1], self._poses[after]
+            share = (t - a[0]) / (b[0] - a[0]) if b[0] > a[0] else 0.0
+            near = a if share < 0.5 else b
+            # (the odometry's yaw runs on: it does not jump from pi to -pi)
+            return (t, a[1] + (b[1] - a[1]) * share, a[2] + (b[2] - a[2]) * share, a[3] + (b[3] - a[3]) * share,
+                    near[4], near[5])
 
     def base_pose(self, t: float | None = None) -> tuple[float, float, float]:
         """Where the base is in the map (x, y, yaw) at time t (None: now): the odometry,
@@ -182,9 +200,15 @@ class WorldView:
             if depth is None or stamp == self._last.get(c.name):
                 continue
             self._last[c.name] = stamp
-            latency = DEFAULT_LATENCY_S if c.latency is None else c.latency
-            if c.source.startswith("scene:") and c.latency is None:
-                latency = 0.0
+            # When was it taken? The stamp says, if the camera knows; otherwise it is when the
+            # picture arrived, which is later.
+            latency = c.latency
+            if latency is None:
+                if c.source.startswith("scene:"):
+                    latency = 0.0
+                else:
+                    stamped = getattr(self.cameras[c.name], "stamps_capture", False)
+                    latency = CAPTURE_DELAY_S if stamped else DEFAULT_LATENCY_S
             taken = stamp - latency
             k = c.intrinsics()
             if self.navd is not None:
@@ -256,9 +280,15 @@ class WorldView:
 
         # Where something stands in this picture: the squares with at least two readings of
         # it. How that sits with what was remembered, and then: more sure of it.
-        standing, readings = np.unique(squares(p[thing, 0].astype(np.float64), p[thing, 1].astype(np.float64)),
-                                       return_counts=True)
-        standing = standing[readings >= 2]
+        tx, ty = p[thing, 0].astype(np.float64), p[thing, 1].astype(np.float64)
+        ti = np.floor((x + c * tx - s * ty) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
+        tj = np.floor((y + s * tx + c * ty) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
+        inside = (ti >= 0) & (ti < side) & (tj >= 0) & (tj < side)
+        far = np.hypot(tx - mount[0, 3], ty - mount[1, 3])[inside]
+        standing, where, readings = np.unique(tj[inside] * side + ti[inside], return_inverse=True, return_counts=True)
+        nearest = np.full(len(standing), np.inf)
+        np.minimum.at(nearest, where.ravel(), far)
+        standing, nearest = standing[readings >= 2], nearest[readings >= 2]
         things = self._things.reshape(-1)
         if len(standing):
             there = self._things >= self.THERE
@@ -272,7 +302,10 @@ class WorldView:
             self.agree[0] += len(standing)
             self.agree[1] += int(near.sum())
             self.agree[2] += int((~near & self._seen.reshape(-1)[standing] & (things[standing] == 0)).sum())
-            things[standing] = np.minimum(self.MOST, things[standing].astype(np.int64) + self.UP)
+            # What is seen from close by counts for more: the camera is good to half a
+            # centimetre at 1 m and to 4 cm at 3 m, which is most of a square.
+            up = np.where(nearest < 1.5, self.UP, np.where(nearest < 2.5, self.UP // 2, self.UP // 4))
+            things[standing] = np.minimum(self.MOST, things[standing].astype(np.int64) + up)
         if not floor.any():
             return
         dx, dy = p[use, 0] - mount[0, 3], p[use, 1] - mount[1, 3]

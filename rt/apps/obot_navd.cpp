@@ -37,7 +37,7 @@ enum What : uint32_t {
     kClear = 5,
     kGrid = 6,       // f64 keep clear -> the map from above
     kKnown = 7,      // i32 i0, j0, u32 width, height -> a byte per square
-    kObstacles = 8,  // f64 z min, z max -> u32 count, then i32 ix, iy each
+    kObstacles = 8,  // f64 z min, z max, i32 least hits -> u32 count, then i32 ix, iy each
     kSave = 9,       // u32 path length, path, u32 frame length, frame
     kLoad = 10,      // the same -> u8 whether it was taken up
     kCount = 11,
@@ -336,7 +336,8 @@ int main(int argc, char**) {
             }
             case kObstacles: {
                 const auto z_min = in.take<double>(), z_max = in.take<double>();
-                const auto places = m.map.obstacles(z_min, z_max);
+                const auto least = in.take<int32_t>();
+                const auto places = m.map.obstacles(z_min, z_max, least);
                 put(answer, static_cast<uint32_t>(places.size()));
                 for (const auto& [ix, iy] : places) {
                     put(answer, static_cast<int32_t>(ix));

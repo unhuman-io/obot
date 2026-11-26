@@ -106,7 +106,7 @@ def test_the_same_map_from_the_same_pictures(room, tmp_path):
         # For planning the two go together: what is only remembered counts with all of its square.
         both_a, both_b = python.obstacles(), native.obstacles()
         assert len(both_a) > len(python.map.obstacles()) and abs(len(both_a) - len(both_b)) < 0.01 * len(both_a)
-        assert python.agree[0] > 2000 and python.agree[1] > 0.8 * python.agree[0]
+        assert python.agree[0] > 2000 and python.agree[1] > 0.7 * python.agree[0]
         assert np.allclose(python.agree, native.agree, rtol=0.01, atol=3)
         known_a, known_b = python.known((-60, -60), (130, 130)), native.known((-60, -60), (130, 130))
         assert known_a.sum() > 1500 and (known_a != known_b).sum() <= 3

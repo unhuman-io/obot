@@ -280,6 +280,64 @@ def test_raw_depth_reader_hands_out_the_newest_frame(monkeypatch):
         source.read()
 
 
+def test_raw_depth_frames_carry_the_time_they_were_taken(monkeypatch):
+    import os
+    import subprocess
+    import time
+
+    import numpy as np
+
+    from obot.ui import cameras
+
+    frames_out, frames_in = os.pipe()
+    times_out, times_in = os.pipe()
+
+    class FakeProcess:
+        stdout = os.fdopen(frames_out, "rb")
+        stderr = os.fdopen(times_out, "rb")
+
+        def kill(self): ...
+        def wait(self): ...
+
+    started = {}
+    monkeypatch.setattr(subprocess, "Popen", lambda args, **k: started.setdefault("args", args) and FakeProcess())
+    source = cameras._V4l2Raw("/dev/video9", 3, 2, 15)
+    assert "--verbose" in started["args"]
+
+    def says(number, taken):                    # as v4l2-ctl --verbose does for every frame
+        os.write(times_in, (f"\tIndex    : {number % 4}\n\tType     : Video Capture\n\tSequence : {number}\n"
+                            f"\tTimestamp: {taken:.6f}s (Monotonic, Start-of-Exposure)\n\n").encode())
+
+    # What format it set comes first, on the same pipe as the frames (as v4l-utils 1.14
+    # on a Jetson Nano writes it: 386 bytes of it, which shifted every picture by 193 pixels).
+    os.write(frames_in, b"Format Video Capture:\n\tWidth/Height      : 640/480\n\tPixel Format      : 'Z16 '\n"
+                        b"\tField             : None\n\tBytes per Line    : 1280\n\tSize Image        : 614400\n"
+                        b"\tColorspace        : sRGB\n\tTransfer Function : Default (maps to sRGB)\n"
+                        b"\tYCbCr/HSV Encoding: Default (maps to ITU-R 601)\n"
+                        b"\tQuantization      : Default (maps to Full Range)\n\tFlags             : \n")
+    now = time.monotonic()
+    says(0, now - 0.040)
+    os.write(frames_in, np.full((2, 3), 500, "<u2").tobytes())
+    stamp, frame = source.read()
+    assert (frame == 500).all() and stamp == pytest.approx(now - 0.040, abs=1e-6) and source.stamps_capture
+    second = time.monotonic() - 0.027
+    says(1, second)
+    os.write(frames_in, np.full((2, 3), 600, "<u2").tobytes())
+    stamp, frame = source.read()
+    assert (frame == 600).all() and stamp == pytest.approx(second, abs=1e-6)
+    # A frame whose time was not said (in time): when it arrived has to do, and says so.
+    os.write(frames_in, np.full((2, 3), 700, "<u2").tobytes())
+    stamp, frame = source.read()
+    assert (frame == 700).all() and abs(stamp - time.monotonic()) < 0.2 and not source.stamps_capture
+    says(2, time.monotonic())                   # (late)
+    says(3, time.monotonic() - 0.03)
+    os.write(frames_in, np.full((2, 3), 800, "<u2").tobytes())
+    stamp, frame = source.read()
+    assert (frame == 800).all() and source.stamps_capture and 0.02 < time.monotonic() - stamp < 0.3
+    os.close(frames_in)
+    os.close(times_in)
+
+
 def test_depth_pictures_are_coloured_by_distance():
     import numpy as np
 

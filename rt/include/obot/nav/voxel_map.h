@@ -60,9 +60,13 @@ class VoxelMap {
     // What changed after revision `since` of map `epoch`, for a page that has `trail` trail
     // points: the layout of WorldMap.delta().
     std::vector<uint8_t> delta(uint32_t since, uint32_t epoch, uint32_t trail) const;
-    // Where the base cannot drive: the (ix, iy) of shown voxels between z_min and z_max
-    // above the floor, each place once. The place is (ix * voxel, iy * voxel).
-    std::vector<std::pair<int, int>> obstacles(double z_min, double z_max) const;
+    // Where the base cannot drive: the (ix, iy) of voxels between z_min and z_max above the
+    // floor, each place once. The place is (ix * voxel, iy * voxel). Only voxels that are
+    // seen more often than seen through count (`least` of at most max_hits): among
+    // hundreds of pictures of a wall there are always some readings a few centimetres in
+    // front of it, and a way has to be planned around the wall, not around those.
+    static constexpr int kSure = 4;
+    std::vector<std::pair<int, int>> obstacles(double z_min, double z_max, int least = kSure) const;
 
     // To a stream of bytes and back (the map as it is, for keeping it across restarts).
     void dump(std::vector<uint8_t>& out) const;

@@ -492,11 +492,16 @@ class WorldMap:
                 self._trail = [(float(x), float(y)) for x, y in np.asarray(saved["trail"]).reshape(-1, 2)]
                 self._trail_start = 0
 
-    def obstacles(self, z_min: float = 0.05, z_max: float = 0.7) -> np.ndarray:
+    SURE = 4  # of at most max_hits
+
+    def obstacles(self, z_min: float = 0.05, z_max: float = 0.7, least: int = SURE) -> np.ndarray:
         """Where the base cannot drive: (x, y) of the cells that have something between
-        z_min and z_max above the floor (N x 2, each place once)."""
+        z_min and z_max above the floor (N x 2, each place once). Only voxels that are seen
+        more often than seen through count (`least`): among hundreds of pictures of a wall
+        there are always some readings a few centimetres in front of it, and a way has to
+        be planned around the wall, not around those."""
         with self._lock:
-            index = self._index[self._shown]
+            index = self._index[self._shown & (self._hits >= least)]
         z = index[:, 2] * self.voxel
         places = np.unique(index[(z > z_min) & (z < z_max), :2], axis=0)
         return places.astype(np.float64) * self.voxel
@@ -571,9 +576,13 @@ class WorldMap:
             inside = (u >= 0) & (u < depth_mm.shape[1]) & (v >= 0) & (v < depth_mm.shape[0])
             candidates, zc = candidates[inside], zc[inside]
             measured = depth_mm[v[inside], u[inside]].astype(np.float32) * 0.001
-            # Only a reading counts (no reading says nothing), and it has to be clearly
-            # behind the voxel: depth noise grows with distance.
-            through = candidates[(measured > 0) & (measured - zc > 0.08 + 0.05 * zc)]
+            # Only a reading counts (no reading says nothing), and it has to be behind the
+            # voxel by more than the camera can be wrong there: its error grows with the
+            # square of the distance (about 0.4 cm at 1 m, 3.6 cm at 3 m). Not by much more
+            # than that: a voxel a few centimetres in front of a wall is a wrong reading,
+            # and the right ones, of the wall behind it, are what takes it out again.
+            behind = np.float32(0.03) + np.float32(0.012) * measured * measured
+            through = candidates[(measured > 0) & (measured - zc > behind)]
             self._hits[through] -= 1
             gone = np.zeros(len(self._keys), bool)
             gone[through[self._hits[through] == 0]] = True

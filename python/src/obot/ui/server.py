@@ -595,7 +595,7 @@ class UiServer:
             if self.world is not None and state is not None:
                 self.world.joint_names = self.robot.info.joint_names
                 self.world.update_pose(float(state["odom_x"]), float(state["odom_y"]), float(state["odom_yaw"]),
-                                       float(state["base_omega"]), state["q"])
+                                       float(state["base_omega"]), state["q"], int(state["t_mono_ns"]) * 1e-9)
                 self._note_where(state)
             operator = self._choose_operator()
             pad = operator.pad if operator else GamepadState()

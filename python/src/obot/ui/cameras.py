@@ -178,6 +178,12 @@ class _V4l2Raw:
     them one by one at the pace of whoever draws them would leave the picture several
     frames behind as soon as drawing is slower than the camera: the frames in between wait
     in the driver's buffers and the pipe.
+
+    Each frame comes with the time it was taken, from the kernel (the start of its
+    exposure, on the clock of time.monotonic()): v4l2-ctl prints it with --verbose. When a
+    frame arrives here says little about that. It is some 50 ms later on a Jetson Nano, and
+    more whenever this process is busy, and to a robot that is turning, 50 ms more or less
+    is a few degrees.
     """
 
     def __init__(self, device: str, width: int, height: int, fps: int, pixelformat: str = "Z16 "):
@@ -192,10 +198,13 @@ class _V4l2Raw:
         self._process = subprocess.Popen(
             [*unbuffered, "v4l2-ctl", "-d", device,
              f"--set-fmt-video=width={width},height={height},pixelformat={pixelformat}",
-             f"--set-parm={fps}", "--stream-mmap", "--stream-to=-"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+             f"--set-parm={fps}", "--stream-mmap", "--stream-to=-", "--verbose"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         _roomy(self._process.stdout)
+        self._taken_at: dict[int, float] = {}   # frame number -> when the kernel says it was taken
+        self.stamps_capture = False             # are the stamps handed out those times?
+        threading.Thread(target=self._times, name=f"v4l2-times-{device}", daemon=True).start()
         self._ready = threading.Condition()
         self._frame: np.ndarray | None = None
         self._stamp = 0.0
@@ -204,23 +213,67 @@ class _V4l2Raw:
         self._ended = False
         threading.Thread(target=self._drain, name=f"v4l2-{device}", daemon=True).start()
 
+    def _times(self) -> None:
+        """What v4l2-ctl says about each frame, as it says it: one "Timestamp: 1234.5678s"
+        per frame, in the order of the frames."""
+        import re
+
+        number = 0
+        for line in getattr(self._process, "stderr", None) or ():
+            found = re.search(rb"Timestamp:\s*([0-9]+\.[0-9]+)s", line)
+            if found:
+                with self._ready:
+                    self._taken_at[number] = float(found.group(1))
+                    self._taken_at.pop(number - 64, None)
+                    self._ready.notify_all()
+                number += 1
+
     def _drain(self) -> None:
         stream = self._process.stdout
+        # With --verbose, v4l2-ctl also describes the format it set, as text, on the same
+        # pipe as the frames and before the first of them: a block of lines whose last
+        # starts with a tab and "Flags". (Other versions may go on with what they did,
+        # "VIDIOC_...: ok", up to VIDIOC_STREAMON.) Every byte of it has to go: left in, it
+        # shifts all the pictures sideways.
+        start = stream.read(6)
+        if start in (b"Format", b"VIDIOC"):
+            def text_upto(mark: bytes) -> None:
+                nonlocal start
+                while not start.endswith(mark) and len(start) < 65536:
+                    more = stream.read(1)
+                    if not more:
+                        return
+                    start += more
+
+            if start == b"Format":
+                text_upto(b"\n\tFlags")
+                text_upto(b"\n")
+                start = stream.read(6)   # (the next six bytes: more text, or the first frame)
+            if start == b"VIDIOC":
+                text_upto(b"VIDIOC_STREAMON: ok\n")
+                start = b""
         while True:
-            data = stream.read(self._size)
+            data = start + stream.read(self._size - len(start))
+            start = b""
+            arrived = time.monotonic()
             with self._ready:
                 if len(data) < self._size:
                     self._ended = True
                 else:
+                    # (its time is printed before the frame is written, but another thread reads it)
+                    self._ready.wait_for(lambda: self._count in self._taken_at, 0.05)
+                    taken = self._taken_at.pop(self._count, None)
+                    self.stamps_capture = taken is not None and 0.0 <= arrived - taken < 1.0
                     self._frame = np.frombuffer(data, dtype="<u2").reshape(self._shape)
-                    self._stamp = time.monotonic()
+                    self._stamp = taken if self.stamps_capture else arrived
                     self._count += 1
                 self._ready.notify_all()
             if len(data) < self._size:
                 return
 
     def read(self, timeout: float = 3.0) -> tuple[float, np.ndarray]:
-        """(arrival time, newest frame), waiting for one that was not handed out before."""
+        """(when it was taken, or failing that when it arrived: see stamps_capture; the
+        newest frame), waiting for one that was not handed out before."""
         with self._ready:
             if not self._ready.wait_for(lambda: self._ended or self._count != self._taken, timeout):
                 raise OSError("no frame from v4l2-ctl")
@@ -252,6 +305,7 @@ class Camera:
         self._raw_stamp = 0.0
         self.fps = 0.0  # measured
         self.error: str | None = None
+        self._source = None   # what the pictures come from, once it is open
         self._kind = config.source.partition(":")[0]
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"camera-{config.name}", daemon=True)
@@ -266,8 +320,13 @@ class Camera:
         with self._lock:
             return self._sequence, self._jpeg
 
+    @property
+    def stamps_capture(self) -> bool:
+        """Are raw()'s stamps the times the pictures were taken (and not when they arrived)?"""
+        return bool(getattr(self._source, "stamps_capture", False))
+
     def raw(self) -> tuple[float, np.ndarray | None]:
-        """(time it arrived, newest picture): depth in millimetres (uint16) from a depth
+        """(its time, newest picture): depth in millimetres (uint16) from a depth
         camera, BGR from a colour camera, None from sources that only deliver JPEG. The
         array is not to be written to."""
         with self._lock:
@@ -377,6 +436,7 @@ class Camera:
             try:
                 if cap is None:
                     cap = self._open()
+                    self._source = cap
                     self.error = None
                 start = time.monotonic()
                 picture = self._read(cap, start)

@@ -225,9 +225,12 @@ int VoxelMap::carve(const Pose& camera, const uint16_t* depth, const Intrinsics&
             continue;
         }
         const float measured = static_cast<float>(depth[w * k.width + u]) * 0.001f;
-        // Only a reading counts (no reading says nothing), and it has to be clearly behind
-        // the voxel: depth noise grows with distance.
-        if (measured > 0 && measured - z > 0.08f + 0.05f * z) {
+        // Only a reading counts (no reading says nothing), and it has to be behind the voxel
+        // by more than the camera can be wrong there: its error grows with the square of
+        // the distance (about 0.4 cm at 1 m, 3.6 cm at 3 m). Not by much more than that: a
+        // voxel a few centimetres in front of a wall is a wrong reading, and the right
+        // ones, of the wall behind it, are what takes it out again.
+        if (measured > 0 && measured - z > 0.03f + 0.012f * measured * measured) {
             if (--voxel.hits == 0) {
                 gone.push_back(i);
             }
@@ -329,11 +332,11 @@ std::vector<uint8_t> VoxelMap::delta(uint32_t since, uint32_t epoch, uint32_t tr
     return out;
 }
 
-std::vector<std::pair<int, int>> VoxelMap::obstacles(double z_min, double z_max) const {
+std::vector<std::pair<int, int>> VoxelMap::obstacles(double z_min, double z_max, int least) const {
     std::vector<std::pair<int, int>> places;
     for (const Voxel& v : voxels_) {
         const double z = v.iz * voxel_;
-        if (v.shown && z > z_min && z < z_max) {
+        if (v.shown && v.hits >= least && z > z_min && z < z_max) {
             places.emplace_back(v.ix, v.iy);
         }
     }

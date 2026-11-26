@@ -101,7 +101,7 @@ Agreement FloorSeen::see(const std::vector<float>& base_points, double mount_x, 
     readings.reserve(base_points.size() / 3);
     const double c = std::cos(yaw), s = std::sin(yaw);
     // Where something stands in this picture: the squares with at least two readings of it.
-    std::vector<long> standing;
+    std::vector<std::pair<long, double>> standing;  // the square, and how far the reading was from the camera
     for (std::size_t i = 0; i + 2 < base_points.size(); i += 3) {
         const double z = base_points[i + 2];
         const bool floor = std::fabs(z) < 0.04;
@@ -115,17 +115,19 @@ Agreement FloorSeen::see(const std::vector<float>& base_points, double mount_x, 
         if (thing) {
             const long at = square(x + c * bx - s * by, y + s * bx + c * by);
             if (at >= 0) {
-                standing.push_back(at);
+                standing.emplace_back(at, readings.back().distance);
             }
         }
     }
     pictures_++;
     Agreement agreement;
     std::sort(standing.begin(), standing.end());
-    std::vector<long> things;  // the squares with two readings or more, each once
+    std::vector<long> things;     // the squares with two readings or more, each once
+    std::vector<double> nearest;  // ... and the nearest of their readings
     for (std::size_t k = 0; k + 1 < standing.size(); k++) {
-        if (standing[k + 1] == standing[k] && (things.empty() || things.back() != standing[k])) {
-            things.push_back(standing[k]);
+        if (standing[k + 1].first == standing[k].first && (things.empty() || things.back() != standing[k].first)) {
+            things.push_back(standing[k].first);
+            nearest.push_back(standing[k].second);
         }
     }
     // How does that sit with what was remembered before this picture?
@@ -142,9 +144,13 @@ Agreement FloorSeen::see(const std::vector<float>& base_points, double mount_x, 
         agreement.remembered += near;
         agreement.contradicted += !near && seen_[at] && things_[at] == 0;
     }
-    for (const long at : things) {
+    for (std::size_t k = 0; k < things.size(); k++) {
+        // What is seen from close by counts for more: the camera is good to half a
+        // centimetre at 1 m and to 4 cm at 3 m, which is most of a square.
+        const long at = things[k];
+        const int up = nearest[k] < 1.5 ? kUp : nearest[k] < 2.5 ? kUp / 2 : kUp / 4;
         picture_[at] = pictures_;
-        things_[at] = static_cast<uint8_t>(std::min<int>(kMost, things_[at] + kUp));
+        things_[at] = static_cast<uint8_t>(std::min<int>(kMost, things_[at] + up));
     }
     std::stable_sort(readings.begin(), readings.end(), [](const Reading& a, const Reading& b) {
         return a.direction != b.direction ? a.direction < b.direction : a.distance < b.distance;

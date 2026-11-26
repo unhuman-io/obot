@@ -64,8 +64,9 @@ sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
 left = "left_wheel_joint"
 right = "right_wheel_joint"
 wheel_radius = 0.125          # m, 250 mm tyre
-track_width = 0.38756         # m, between tyre centres (CAD). Checked on the robot: turning on the
-                              # spot, the depth camera's pictures line up best with 0.385 to 0.388.
+track_width = 0.3845          # m. Between the tyre centres it is 0.38756 (CAD); turning on the spot the
+                              # base turns 0.8 % more than that gives, measured with the depth camera
+                              # over six turns (three each way, the same both ways).
 v_max = 0.5
 omega_max = 1.5
 

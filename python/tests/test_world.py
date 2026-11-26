@@ -585,3 +585,19 @@ def test_nothing_to_compare_with_leaves_the_odometry_alone():
     assert view.correction == (0.0, 0.0, 0.0)
     assert view.match == {"scan": 0, "used": False, "plan": 0}
     assert len(view.map) > 500                                       # the floor was mapped all the same
+
+
+def test_the_pose_at_a_time_lies_between_the_states_before_and_after():
+    from obot.ui.worldview import WorldView
+
+    view = WorldView(ToolsConfig(), {}, native=False)
+    assert view._pose_at(5.0)[1:4] == (0.0, 0.0, 0.0)
+    view.update_pose(1.0, 0.0, 6.0, 0.5, t=10.00)
+    view.update_pose(1.2, 0.1, 6.4, 0.7, t=10.02)                      # (yaw runs on past 2 pi)
+    view.update_pose(1.2, 0.1, 6.4, 0.0, t=10.04)
+    assert view._pose_at(10.005)[1:5] == pytest.approx((1.05, 0.025, 6.1, 0.5))
+    assert view._pose_at(10.015)[1:5] == pytest.approx((1.15, 0.075, 6.3, 0.7))
+    assert view._pose_at(9.0)[1:4] == (1.0, 0.0, 6.0)                   # before all that is known: the first
+    assert view._pose_at(11.0)[1:4] == (1.2, 0.1, 6.4) and view._pose_at(None)[1:4] == (1.2, 0.1, 6.4)
+    view.update_pose(1.3, 0.1, 6.4, 0.0, t=10.03)                       # a state from before the last one: taken as now
+    assert view._poses[-1][0] > 10.04

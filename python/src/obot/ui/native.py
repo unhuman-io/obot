@@ -140,8 +140,8 @@ class Navd:
         raw = self.ask(KNOWN, struct.pack("<iiII", int(origin[0]), int(origin[1]), int(shape[1]), int(shape[0])))
         return np.frombuffer(raw, np.uint8).reshape(shape).astype(bool)
 
-    def obstacles(self, z_min: float, z_max: float) -> np.ndarray:
-        raw = self.ask(OBSTACLES, struct.pack("<dd", z_min, z_max))
+    def obstacles(self, z_min: float, z_max: float, least: int) -> np.ndarray:
+        raw = self.ask(OBSTACLES, struct.pack("<ddi", z_min, z_max, least))
         (count,) = struct.unpack_from("<I", raw)
         return np.frombuffer(raw, "<i4", count * 2, 4).reshape(-1, 2).astype(np.float64) * self.voxel
 
@@ -185,8 +185,8 @@ class NativeMap:
     def delta(self, since: int = 0, epoch: int = 0, trail: int = 0) -> bytes:
         return self.navd.delta(since, epoch, trail)
 
-    def obstacles(self, z_min: float = 0.05, z_max: float = 0.7) -> np.ndarray:
-        return self.navd.obstacles(z_min, z_max)
+    def obstacles(self, z_min: float = 0.05, z_max: float = 0.7, least: int = 4) -> np.ndarray:
+        return self.navd.obstacles(z_min, z_max, least)
 
     def points(self) -> tuple[np.ndarray, np.ndarray]:
         """Centres (N x 3, metres) and colours (N x 3) of the voxels that are shown."""
