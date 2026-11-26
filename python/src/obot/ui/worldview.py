@@ -75,6 +75,16 @@ class WorldView:
         # Also for driving: where the floor has been seen to be free, from above, as a grid
         # of SEEN_CELL-sized squares around the origin of the map (see known()).
         self._seen = np.zeros((2 * self.SEEN_HALF + 1, 2 * self.SEEN_HALF + 1), bool)
+        # The long memory of the map, on the same grid: how sure it is that something stands
+        # in each square. It goes up by UP (to MOST) with every picture that shows something
+        # there, and down by DOWN with every picture that shows floor there instead; from
+        # THERE on the square counts as having something in it. Unlike the 3D map it has no
+        # size to run out of, and it lets go of what it has seen only slowly.
+        self._things = np.zeros(self._seen.shape, np.uint8)
+        # How the pictures agree with what was remembered, added up: squares with something
+        # in them, of those remembered, of those contradicted (see agreement()).
+        self.agree = [0, 0, 0]
+        self.note = ""  # for the page: what became of the map from before
         self.plan = world.FloorPlan()
         self.update_ms = 0.0
         self.error: str | None = None
@@ -149,6 +159,7 @@ class WorldView:
             "update_ms": round(self.update_ms, 1),
             "error": self.error,
             "leveled": self.leveled,
+            "note": self.note,
             "correction": [round(v, 4) for v in self.correction],
             "match": self.match,
             "cameras": {c.name: [round(float(v), 4) for v in self.camera_pose(c)[:3].ravel()] for c in self.depth},
@@ -201,6 +212,7 @@ class WorldView:
             used += 1
         return used
 
+    UP, DOWN, MOST, THERE = 8, 2, 80, 16
     SEEN_CELL = 0.06  # m
     SEEN_HALF = 250  # cells: the grid reaches 15 m each way
     STAND = 0.24  # m: where the base stands, this much around the middle of its wheel axis is free
@@ -231,6 +243,36 @@ class WorldView:
         floor = np.abs(p[:, 2]) < 0.04
         thing = (p[:, 2] > self.WAY_HEIGHT[0]) & (p[:, 2] < self.WAY_HEIGHT[1])
         use = floor | thing
+        x, y, yaw = self.base_pose(taken)
+        c, s = math.cos(yaw), math.sin(yaw)
+        side = 2 * self.SEEN_HALF + 1
+
+        def squares(bx, by):
+            """Which squares of the grid places in the base frame are in (those inside it)."""
+            i = np.floor((x + c * bx - s * by) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
+            j = np.floor((y + s * bx + c * by) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
+            inside = (i >= 0) & (i < side) & (j >= 0) & (j < side)
+            return j[inside] * side + i[inside]
+
+        # Where something stands in this picture: the squares with at least two readings of
+        # it. How that sits with what was remembered, and then: more sure of it.
+        standing, readings = np.unique(squares(p[thing, 0].astype(np.float64), p[thing, 1].astype(np.float64)),
+                                       return_counts=True)
+        standing = standing[readings >= 2]
+        things = self._things.reshape(-1)
+        if len(standing):
+            there = self._things >= self.THERE
+            j, i = np.divmod(standing, side)
+            near = np.zeros(len(standing), bool)
+            for dj in (-1, 0, 1):
+                for di in (-1, 0, 1):
+                    nj, ni = j + dj, i + di
+                    ok = (nj >= 0) & (nj < side) & (ni >= 0) & (ni < side)
+                    near[ok] |= there[nj[ok], ni[ok]]
+            self.agree[0] += len(standing)
+            self.agree[1] += int(near.sum())
+            self.agree[2] += int((~near & self._seen.reshape(-1)[standing] & (things[standing] == 0)).sum())
+            things[standing] = np.minimum(self.MOST, things[standing].astype(np.int64) + self.UP)
         if not floor.any():
             return
         dx, dy = p[use, 0] - mount[0, 3], p[use, 1] - mount[1, 3]
@@ -254,12 +296,22 @@ class WorldView:
         if len(first):
             ends.append((np.stack([dx[first], dy[first]], axis=1)[:, None, :] * t).reshape(-1, 2))
         local = np.concatenate(ends) + mount[:2, 3]
-        x, y, yaw = self.base_pose(taken)
-        c, s = math.cos(yaw), math.sin(yaw)
-        i = np.floor((x + c * local[:, 0] - s * local[:, 1]) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
-        j = np.floor((y + s * local[:, 0] + c * local[:, 1]) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
-        inside = (i >= 0) & (i <= 2 * self.SEEN_HALF) & (j >= 0) & (j <= 2 * self.SEEN_HALF)
-        self._seen[j[inside], i[inside]] = True
+        free = np.unique(squares(local[:, 0], local[:, 1]))
+        self._seen.reshape(-1)[free] = True
+        # floor where something was remembered (and is not seen now): a little less sure of it
+        fading = free[~np.isin(free, standing)]
+        things[fading] = np.maximum(0, things[fading].astype(np.int64) - self.DOWN)
+
+    def obstacles(self) -> np.ndarray:
+        """Where the base cannot drive, (x, y) each: what stands there in the 3D map now, and
+        what the floor plan remembers to stand there."""
+        now = self.map.obstacles(*self.WAY_HEIGHT)
+        if self.navd is not None:
+            remembered = self.navd.things()
+        else:
+            rows, columns = np.nonzero(self._things >= self.THERE)
+            remembered = np.stack([columns, rows], axis=1) - self.SEEN_HALF
+        return np.concatenate([now, (remembered + 0.5) * self.SEEN_CELL])
 
     GRID_MAGIC = 0x3147424F  # "OBG1"
 
@@ -270,7 +322,8 @@ class WorldView:
         Layout (little endian): u32 magic; i32 i0, j0; u32 width, height; f32 cell size;
         then height rows of width bytes, the square [j][i] reaching from ((i + i0) * cell,
         (j + j0) * cell): 0 not seen, 1 free floor, 2 something there, 3 free but closer to
-        something than `keep_clear` (the middle of the base cannot be there)."""
+        something than `keep_clear` (the middle of the base cannot be there), 4 something
+        remembered to be there that the 3D map does not have now."""
         if self.navd is not None:
             return self.navd.grid(keep_clear)
         import struct
@@ -284,16 +337,19 @@ class WorldView:
             index = np.floor(things / cell).astype(np.int64) + half
             ok = np.all((index >= 0) & (index <= 2 * half), axis=1)
             occupied[index[ok, 1], index[ok, 0]] = True
-        rows, columns = np.nonzero(self._seen | occupied)
+        remembered = (self._things >= self.THERE) & ~occupied
+        rows, columns = np.nonzero(self._seen | occupied | remembered)
         if not len(rows):
             return struct.pack("<IiiIIf", self.GRID_MAGIC, 0, 0, 0, 0, cell)
         pad = int(0.5 / cell)
         a, b = max(0, rows.min() - pad), min(2 * half, rows.max() + pad) + 1
         c, d = max(0, columns.min() - pad), min(2 * half, columns.max() + pad) + 1
-        occupied, seen = occupied[a:b, c:d], self._seen[a:b, c:d]
-        distance = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+        occupied, seen, remembered = occupied[a:b, c:d], self._seen[a:b, c:d], remembered[a:b, c:d]
+        distance = cv2.distanceTransform((~(occupied | remembered)).astype(np.uint8), cv2.DIST_L2,
+                                         cv2.DIST_MASK_PRECISE)
         near = distance * cell < keep_clear
-        cells = np.where(occupied, 2, np.where(seen, np.where(near, 3, 1), 0)).astype(np.uint8)
+        cells = np.where(occupied, 2, np.where(remembered, 4, np.where(seen, np.where(near, 3, 1), 0)))
+        cells = cells.astype(np.uint8)
         return struct.pack("<IiiIIf", self.GRID_MAGIC, c - half, a - half, d - c, b - a, cell) + cells.tobytes()
 
     def known(self, origin, shape) -> np.ndarray:
@@ -402,10 +458,12 @@ class WorldView:
             colour_stamp, picture = self.cameras[partner.name].raw()
             if picture is not None and abs(colour_stamp - stamp) < 0.5:
                 colour = (picture, partner.intrinsics(), world.invert(self.camera_pose(partner, taken)) @ pose)
-        ahead, _, _, shown = self.navd.picture(
+        ahead, _, _, shown, agreement = self.navd.picture(
             depth, k, self.config.stride, self.config.near, self.config.range, self.mounts[c.name] @ world.OPTICAL,
             pose, self.base_pose(taken), on_base, for_map, colour)
         self.map.shown = shown
+        for k in range(3):
+            self.agree[k] += agreement[k]
         if ahead is not None:
             self.ahead = (ahead, stamp)
         return int(for_map)
@@ -434,7 +492,10 @@ class WorldView:
             return
         saved = self.map.dump()
         rows, columns = np.nonzero(self._seen)
+        thing_rows, thing_columns = np.nonzero(self._things)
         saved.update(frame=np.array(frame), seen=np.stack([rows, columns], axis=1).astype(np.int32),
+                     things=np.stack([thing_rows, thing_columns, self._things[thing_rows, thing_columns]],
+                                     axis=1).astype(np.int32),
                      correction=np.asarray(self.correction))
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path + ".part", "wb") as f:
@@ -444,8 +505,9 @@ class WorldView:
         os.replace(path + ".part", path)
 
     def load(self, path: str, frame: str) -> bool:
-        """Take up the map saved in a file, if it is in the odometry `frame`. Returns
-        whether it was."""
+        """Take up the map saved in a file, if it is in the odometry `frame` ("*": whichever
+        it is in; whoever asks knows how that relates to the odometry now). Returns whether
+        it was."""
         if self.navd is not None:
             if not self.navd.load(path, frame):
                 return False
@@ -453,12 +515,13 @@ class WorldView:
             return True
         try:
             with np.load(path) as saved:
-                if str(saved["frame"]) != frame:
+                if frame != "*" and str(saved["frame"]) != frame:
                     return False
                 self.map.restore(saved)
                 self._seen[:] = False
                 self._seen[saved["seen"][:, 0], saved["seen"][:, 1]] = True
-                self.correction = tuple(float(v) for v in saved["correction"])
+                self._things[:] = 0
+                self._things[saved["things"][:, 0], saved["things"][:, 1]] = saved["things"][:, 2]
             return True
         except Exception:  # not there, not a map, or a map of another kind (obot-navd's own)
             return False
@@ -467,6 +530,7 @@ class WorldView:
         self.map.clear()
         self.plan = world.FloorPlan()
         self._seen[:] = False
+        self._things[:] = 0
         self._stood = None
 
     def floor_seen(self) -> int:

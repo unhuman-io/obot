@@ -100,6 +100,12 @@ def test_the_same_map_from_the_same_pictures(room, tmp_path):
         # What stands in the way of the base, and where the floor has been seen to be free.
         things = lambda view: {tuple(p) for p in np.rint(view.map.obstacles() / 0.03).astype(int).tolist()}  # noqa: E731
         assert same_share(things(python), things(native)) > 0.999
+        # What the floor plan remembers to stand where, and how the pictures agreed with it.
+        remembered = lambda view: {tuple(p) for p in np.floor(view.obstacles()[len(view.map.obstacles()):]  # noqa: E731
+                                                              / 0.06).astype(int).tolist()}
+        assert len(remembered(python)) > 150 and same_share(remembered(python), remembered(native)) > 0.99
+        assert python.agree[0] > 2000 and python.agree[1] > 0.8 * python.agree[0]
+        assert np.allclose(python.agree, native.agree, rtol=0.01, atol=3)
         known_a, known_b = python.known((-60, -60), (130, 130)), native.known((-60, -60), (130, 130))
         assert known_a.sum() > 1500 and (known_a != known_b).sum() <= 3
         assert abs(python.floor_seen() - native.floor_seen()) <= 3
@@ -128,6 +134,8 @@ def test_the_same_map_from_the_same_pictures(room, tmp_path):
         assert native.load(path_saved, "run 1")
         assert shown(native) == before and len(native.map) == len(before)
         assert (native.known((-60, -60), (130, 130)) != known_b).sum() < 200   # (one more picture since)
+        assert len(native.navd.things()) > 150                                 # what it remembered too
+        assert native.load(path_saved, "*")                                    # whichever run it is of
         assert not python.load(path_saved, "run 1")                            # the Python map does not read it
         assert not native.load(str(tmp_path / "nothing"), "run 1")
     finally:

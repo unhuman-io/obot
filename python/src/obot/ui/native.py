@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-SETUP, PICTURE, DELTA, POSE, CLEAR, GRID, KNOWN, OBSTACLES, SAVE, LOAD, COUNT = range(1, 12)
+SETUP, PICTURE, DELTA, POSE, CLEAR, GRID, KNOWN, OBSTACLES, SAVE, LOAD, COUNT, THINGS = range(1, 13)
 ON_BASE, FOR_MAP, WITH_COLOUR = 1, 2, 4
 
 
@@ -108,19 +108,21 @@ class Navd:
     # --- what it does ------------------------------------------------------------------------
 
     def picture(self, depth: np.ndarray, k, stride: int, near: float, far: float, to_base, to_map, base_pose,
-                on_base: bool, for_map: bool, colour=None) -> tuple[float | None, int, int, int]:
+                on_base: bool, for_map: bool, colour=None) -> tuple[float | None, int, int, int, tuple]:
         """A depth picture and what to do with it (see obot_navd.cpp). colour: (picture BGR,
         its intrinsics, pose of the depth camera's optical frame in the colour camera's).
         Returns (how far ahead the nearest thing in the base's way is, or None if not
-        looked; points used; voxels taken out; voxels shown now)."""
+        looked; points used; voxels taken out; voxels shown now; how the picture agrees
+        with the floor plan: squares with something in them, of those remembered, of those
+        contradicted)."""
         flags = (ON_BASE if on_base else 0) | (FOR_MAP if for_map else 0) | (WITH_COLOUR if colour is not None else 0)
         parts = [struct.pack("<I", flags), _intrinsics(k), struct.pack("<idd", stride, near, far), _pose(to_base),
                  _pose(to_map), struct.pack("<ddd", *base_pose), np.ascontiguousarray(depth, "<u2").tobytes()]
         if colour is not None:
             picture, colour_k, to_colour = colour
             parts += [_intrinsics(colour_k), _pose(to_colour), np.ascontiguousarray(picture, np.uint8).tobytes()]
-        ahead, points, removed, shown = struct.unpack("<dIIQ", self.ask(PICTURE, *parts))
-        return (None if ahead < 0 else ahead), points, removed, shown
+        ahead, points, removed, shown, *agreement = struct.unpack("<dIIQIII", self.ask(PICTURE, *parts))
+        return (None if ahead < 0 else ahead), points, removed, shown, tuple(agreement)
 
     def delta(self, since: int = 0, epoch: int = 0, trail: int = 0) -> bytes:
         return self.ask(DELTA, struct.pack("<III", since & 0xFFFFFFFF, epoch & 0xFFFFFFFF, trail & 0xFFFFFFFF))
@@ -142,6 +144,13 @@ class Navd:
         raw = self.ask(OBSTACLES, struct.pack("<dd", z_min, z_max))
         (count,) = struct.unpack_from("<I", raw)
         return np.frombuffer(raw, "<i4", count * 2, 4).reshape(-1, 2).astype(np.float64) * self.voxel
+
+    def things(self) -> np.ndarray:
+        """The squares of the floor plan in which something is remembered to stand: (i, j)
+        each, the square reaching from (i * cell, j * cell)."""
+        raw = self.ask(THINGS)
+        (count,) = struct.unpack_from("<I", raw)
+        return np.frombuffer(raw, "<i4", count * 2, 4).reshape(-1, 2)
 
     def save(self, path: str, frame: str) -> None:
         self.ask(SAVE, _text(path), _text(frame))

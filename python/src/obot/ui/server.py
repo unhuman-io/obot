@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import hmac
 import json
+import math
 import os
 import sys
 import time
@@ -24,6 +25,7 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
+from .. import world as wm
 from ..client import NotRunning, Request, Robot, RobotMode, describe
 from ..config import ToolsConfig
 from ..layout import BaseMode
@@ -97,6 +99,9 @@ class UiServer:
         self._nav_enable = 0.0
         self._map_frame: str | None = None
         self._run_started: float | None = None  # when the obot-rtd that was last connected started
+        self._where: dict | None = None  # where the robot is on the map, and how its wheels stand
+        self._where_saved: dict | None = None
+        self._check: dict | None = None  # a map taken up again is being checked against the camera
         self._plot_t0: int | None = None
         self.sockets: dict[web.WebSocketResponse, Operator] = {}
         self.local: Operator | None = None
@@ -319,30 +324,129 @@ class UiServer:
         base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
         return os.path.join(base, "obot", f"map-{self.config.shm_name}.npz")
 
+    @property
+    def where_path(self) -> str:
+        """Next to the map: where on it the robot is, and how its wheels stand."""
+        return self.map_path[:-len(".npz")] + ".where.json"
+
     def _save_map(self) -> None:
-        """The map is in the frame of the odometry, and that starts at zero with every run
-        of obot-rtd: a saved map is only good for the run it was made in."""
         if self.world is not None and self._map_frame is not None and len(self.world.map):
             with contextlib.suppress(OSError):
                 self.world.save(self.map_path, self._map_frame)
+            self._save_where(force=True)
+
+    def _save_where(self, force: bool = False) -> None:
+        """Where the robot is on its map, to a file: often, because it is what lets the map
+        be taken up again when the robot is started the next time (see _take_up_map)."""
+        where = self._where
+        if where is None or (not force and where == self._where_saved):
+            return
+        self._where_saved = where
+        with contextlib.suppress(OSError):
+            os.makedirs(os.path.dirname(self.where_path), exist_ok=True)
+            with open(self.where_path + ".part", "w") as f:
+                json.dump(where, f)
+            os.replace(self.where_path + ".part", self.where_path)
+
+    def _note_where(self, state) -> None:
+        if self.world is None or self._map_frame is None:
+            return
+        pose = [round(float(v), 4) for v in self.world.base_pose()]
+        self._where = {"run": self._map_frame, "pose": pose, "wheels": self._wheels(state),
+                       "correction": [round(float(v), 6) for v in self.world.correction]}
+
+    def _wheels(self, state) -> list[float]:
+        """How the wheels stand: the angle of every joint that turns without end, within a turn."""
+        turning = self.robot.info.continuous
+        return [round(math.remainder(float(q), 2 * math.pi), 4) for q, endless in zip(state["q"], turning, strict=False)
+                if endless]
+
+    def _wheels_as(self, before, state) -> bool:
+        """Do the wheels stand as they did (to 0.03 rad, 4 mm of a 250 mm wheel's way)?"""
+        now = self._wheels(state)
+        return bool(now) and len(now) == len(before) and all(
+            abs(math.remainder(a - b, 2 * math.pi)) < 0.03 for a, b in zip(now, before, strict=True))
 
     def _take_up_map(self, state) -> None:
-        """Once the daemon is there: which run of it is this? A map made in another run is
-        in other odometry and is dropped, also the one in memory (the daemon was restarted
-        under a page server that kept running). If there is no map, the saved one is taken
-        up, if it is from this run."""
+        """Once the daemon is there: how does its odometry relate to the map?
+
+        The map is in the frame of the odometry it was made with, and the odometry starts
+        at zero with every run of obot-rtd. But a robot whose wheels stand exactly as they
+        did when it was last heard of has not driven anywhere in between: it is where it
+        was, and the map is taken up again from there (and then checked against what the
+        camera sees, in case the robot was carried: _check_place). Otherwise there is no
+        telling where on the old map the robot is, and a new one is started."""
         started = (int(state["t_real_ns"]) - int(state["cycle"]) * round(self.robot.info.period_s * 1e9)) / 1e9
-        if self._run_started is not None and abs(started - self._run_started) > 2.0 and self.world is not None:
-            self.world.clear()
+        run = str(round(started))
+        same = self._run_started is not None and abs(started - self._run_started) <= 2.0
+        first = self._run_started is None
+        self._run_started = started
+        self._map_frame = run
+        if self.world is None or same:
+            return
+        odom = (float(state["odom_x"]), float(state["odom_y"]), float(state["odom_yaw"]))
+        if first:
+            # The page server has just started: what does the file say?
+            try:
+                with open(self.where_path) as f:
+                    where = json.load(f)
+                pose, wheels, correction = where["pose"], where["wheels"], where["correction"]
+                before = float(where["run"])
+            except (OSError, ValueError, KeyError, TypeError):
+                return
+            if len(self.world.map):
+                return
+            if abs(before - started) <= 2.0:   # the same run of obot-rtd: nothing has changed
+                if self.world.load(self.map_path, "*"):
+                    self.world.correction = tuple(float(v) for v in correction)
+                    self.world.note = ""
+                return
+        else:
+            # obot-rtd was started again under this page server (every deploy does that).
+            where = self._where
+            if where is None:
+                self.world.clear()
+                return
+            pose, wheels = where["pose"], where["wheels"]
             if self.nav is not None:
                 self.nav.cancel("stopped: the robot's odometry started again")
-        self._run_started = started
-        self._map_frame = str(round(started))
-        if self.world is not None and not len(self.world.map):
-            for frame in (self._map_frame, str(round(started) - 1), str(round(started) + 1)):
-                if self.world.load(self.map_path, frame):
-                    self._map_frame = frame
-                    break
+        if self._wheels_as(wheels, state) and (not first or self.world.load(self.map_path, "*")):
+            # where it was on the map, with the odometry as it is now
+            self.world.correction = wm.compose(tuple(float(v) for v in pose), wm.inverse(odom))
+            self.world.note = "took up the map from before: checking it against what the camera sees"
+            self._check = {"until": time.monotonic() + 45.0, "from": list(self.world.agree)}
+        else:
+            if not first:
+                self.world.clear()
+            with contextlib.suppress(OSError):   # (the old map is kept once, in case)
+                os.replace(self.map_path, self.map_path + ".previous")
+            self.world.correction = (0.0, 0.0, 0.0)
+            self.world.note = ("new map: the wheels have turned since the last one was made, so where the robot "
+                               "is on it is not known")
+
+    def _check_place(self) -> None:
+        """After taking up a map on the strength of the wheels: do the pictures agree with
+        it? If the robot was carried somewhere else, they show things where the map has
+        none, and the map is of no use here."""
+        check = self._check
+        if check is None or self.world is None:
+            return
+        things, remembered = (self.world.agree[k] - check["from"][k] for k in (0, 1))
+        if things >= 150:
+            self._check = None
+            if remembered < 0.4 * things:
+                self.world.clear()
+                self.world.correction = (0.0, 0.0, 0.0)
+                with contextlib.suppress(OSError):
+                    os.replace(self.map_path, self.map_path + ".previous")
+                self.world.note = "new map: the robot is not where it was when the last one was made"
+                if self.nav is not None:
+                    self.nav.cancel("stopped: the map did not fit")
+            else:
+                self.world.note = "took up the map from before"
+        elif time.monotonic() > check["until"]:
+            self._check = None
+            self.world.note = "took up the map from before (nothing in view to check it against)"
 
     def _drive_to_point(self, operator, request: Request, state, command, dt: float) -> bool:
         """While the base is being driven to a point on the map: put the speeds for that
@@ -485,10 +589,14 @@ class UiServer:
                 self._take_up_map(state)
             if tick % (TICK_HZ * 120) == 0:
                 await asyncio.get_running_loop().run_in_executor(None, self._save_map)
+            if tick % TICK_HZ == 0:
+                self._check_place()
+                asyncio.get_running_loop().run_in_executor(None, self._save_where)
             if self.world is not None and state is not None:
                 self.world.joint_names = self.robot.info.joint_names
                 self.world.update_pose(float(state["odom_x"]), float(state["odom_y"]), float(state["odom_yaw"]),
                                        float(state["base_omega"]), state["q"])
+                self._note_where(state)
             operator = self._choose_operator()
             pad = operator.pad if operator else GamepadState()
             out = self.mapper.step(pad, state, dt)

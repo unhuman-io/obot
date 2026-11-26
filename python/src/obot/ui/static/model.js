@@ -237,7 +237,31 @@ function addWorld(scene, query, frustums, fovDegrees) {
   setInterval(poll, 300);
   poll();
 
+  // The floor plan (the map from above, as the page draws it) laid on the floor: what the
+  // robot remembers of a place stays visible there when the points of the 3D map have gone.
+  let floorPlan = null;
+  function setFloorPlan(picture, grid) {
+    if (!grid.width || !grid.height) return;
+    if (!floorPlan || floorPlan.material.map.image.width !== picture.width
+        || floorPlan.material.map.image.height !== picture.height) {
+      if (floorPlan) { scene.remove(floorPlan); floorPlan.material.map.dispose(); floorPlan.material.dispose(); }
+      const texture = new THREE.CanvasTexture(picture);
+      texture.magFilter = THREE.NearestFilter;
+      texture.minFilter = THREE.NearestFilter;
+      texture.colorSpace = THREE.SRGBColorSpace;
+      floorPlan = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+                                 new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.85, depthWrite: false }));
+      floorPlan.layers.set(MAP_LAYER);
+      scene.add(floorPlan);
+    }
+    floorPlan.material.map.needsUpdate = true;
+    floorPlan.scale.set(grid.width * grid.cell, grid.height * grid.cell, 1);
+    floorPlan.position.set((grid.i0 + grid.width / 2) * grid.cell, (grid.j0 + grid.height / 2) * grid.cell, -0.02);
+  }
+
   return {
+    setFloorPlan,
+    get floorPlan() { return floorPlan; },
     get count() { return count; },
     get failed() { return failed; },
     get trail() { return trail.length / 3; },

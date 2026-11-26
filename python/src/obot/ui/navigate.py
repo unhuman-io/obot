@@ -70,7 +70,7 @@ class Costmap:
         self.from_things = from_things
         self.blocked = from_things < RADIUS
         self.unknown = np.zeros(self.shape, bool)
-        beside_unknown = np.zeros(self.shape, bool)
+        from_unknown = np.full(self.shape, np.inf)
         if known is not None:
             # (closing the small gaps that the rows of a picture leave between them far away)
             seen = cv2.morphologyEx(known(self.origin, self.shape).astype(np.uint8), cv2.MORPH_CLOSE,
@@ -80,19 +80,21 @@ class Costmap:
             # front of for one: the base keeps clear of it too.
             from_unknown = cv2.distanceTransform((~self.unknown).astype(np.uint8), cv2.DIST_L2,
                                                  cv2.DIST_MASK_PRECISE) * cell
-            beside_unknown = from_unknown < UNSEEN
             # (for the price of a step, the unseen counts like a thing)
             self.clearance = np.minimum(from_things, np.where(self.unknown, from_things, from_unknown))
-        # Standing closer to something than the plan would allow (it happens: the base was
-        # driven there by hand, and around where it starts little has been seen): the way
-        # out is allowed, as long as it gets no closer to anything.
+        beside_unknown = from_unknown < UNSEEN
+        # Standing closer to something, or to unseen floor, than a plan would go (the base
+        # was driven there by hand; where it starts, little has been seen): the way out is
+        # allowed, but only through places at least as clear as where it stands. Never
+        # closer: a base that may come a little closer with every new plan ends up touching.
         si, sj = self.index(start)
         if self.inside(si, sj):
             rows, columns = np.ogrid[: self.shape[0], : self.shape[1]]
             around = (rows - sj) ** 2 + (columns - si) ** 2 < (0.6 / cell) ** 2
             if self.blocked[sj, si]:
-                self.blocked &= ~(around & (from_things >= min(RADIUS, from_things[sj, si]) - cell))
-            beside_unknown &= ~around
+                self.blocked &= ~(around & (from_things >= from_things[sj, si]))
+            if beside_unknown[sj, si]:
+                beside_unknown &= ~(around & (from_unknown >= from_unknown[sj, si]))
         # `solid`: where the base cannot be for what the map knows. `blocked`: where it may
         # not go now, which is that and everything not yet seen to be free.
         self.solid = self.blocked.copy()
@@ -385,7 +387,7 @@ class Navigator:
         try:
             e = self._explore
             start = self.view.base_pose()[:2]
-            costmap = Costmap(self.view.map.obstacles(), np.asarray(start), np.asarray(start), self.view.known,
+            costmap = Costmap(self.view.obstacles(), np.asarray(start), np.asarray(start), self.view.known,
                               pad=e["radius"] + math.hypot(start[0] - e["from"][0], start[1] - e["from"][1]) + 1.0)
             target = costmap.frontier(start, e["from"], e["radius"], e["been"])
         except Exception as error:  # (no map to choose from must not leave it hanging)
@@ -420,9 +422,12 @@ class Navigator:
     def _plan_now(self, serial: int) -> None:
         try:
             start, goal = self.view.base_pose()[:2], self.goal
-            costmap = Costmap(self.view.map.obstacles(), np.asarray(start), np.asarray(goal), self.view.known)
-            # (a goal in or right next to something: as near to it as the base can be)
-            reachable = costmap.nearest_free(goal) or goal
+            costmap = Costmap(self.view.obstacles(), np.asarray(start), np.asarray(goal), self.view.known)
+            # A goal in or right next to something in the map: as near to it as the base can
+            # be. (Not for a goal that has merely not been seen yet: that is driven towards.)
+            gi, gj = costmap.index(goal)
+            at_a_thing = costmap.inside(gi, gj) and costmap.solid[gj, gi]
+            reachable = (costmap.nearest_free(goal) if at_a_thing else None) or goal
             path, whole = costmap.plan_towards(start, reachable)
             if serial != self._serial:
                 return

@@ -124,7 +124,7 @@
   </section>
   <section id="plan-section" style="display:none">
     <h2>Map from above</h2>
-    <canvas id="plan" title="Dark: something stands there. Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. Wheel or two fingers: zoom. Drag: move. Double click: the whole map. With Drive to a click on, a click here sets where to go."></canvas>
+    <canvas id="plan" title="Dark: something stands there (lighter: remembered to, and not in the 3D map now). Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. Wheel or two fingers: zoom. Drag: move. Double click: the whole map. With Drive to a click on, a click here sets where to go."></canvas>
   </section>
   <section>
     <h2>Plots</h2>
@@ -243,7 +243,7 @@ function showState(s) {
     const m = s.world.match || {};
     const seen = !("scan" in m) ? "" : m.used ? "cameras agree with the map (" + Math.round(m.share * 100) + " % of the view)" :
       m.share === undefined ? "cameras: nothing known in view" : "cameras: view not matched";
-    text("world-note", [navNote(), s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update", seen,
+    text("world-note", [navNote(), s.world.note, s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update", seen,
                         s.world.error ? "error: " + s.world.error : "", ...leveled].filter(Boolean).join(" · "));
   }
   if (s.nav !== undefined) showNav(s.nav);
@@ -374,7 +374,8 @@ async function pollPlan() {
       const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
       return [r, g, b, alpha];
     };
-    const colours = [[0, 0, 0, 0], shade("--panel", 255), shade("--ink", 235), shade("--muted", 70)];
+    // not seen, free floor, something there, free but too close, something remembered to be there
+    const colours = [[0, 0, 0, 0], shade("--panel", 255), shade("--ink", 235), shade("--muted", 70), shade("--ink", 130)];
     plan.picture.width = grid.width;
     plan.picture.height = grid.height;
     const context = plan.picture.getContext("2d"), image = context.createImageData(grid.width, grid.height);
@@ -384,6 +385,7 @@ async function pollPlan() {
     }
     context.putImageData(image, 0, 0);
     plan.grid = grid;
+    if (window.obotModel && window.obotModel.world) window.obotModel.world.setFloorPlan(plan.picture, grid);
     drawPlan();
   } catch (e) { /* the next second will do */ } finally { plan.busy = false; }
 }

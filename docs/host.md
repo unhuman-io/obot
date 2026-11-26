@@ -331,10 +331,41 @@ What it does not do: it does not see what is lower than 5 cm, glass, or what is 
 camera's view close by (a table top at 30 cm). The back of the base swings through 0.36 m
 when it turns on the spot, and nothing looks there. Keep a hand near a controller.
 
-The map is saved every two minutes and when the page server stops
-(`~/.local/state/obot/`), and taken up again when it starts. It is only good for as long as
-`obot-rtd` keeps running: the map is in the frame of the wheel odometry, which starts at
-zero with the daemon, and nothing yet finds the robot's place in an old map.
+### What the map remembers, and for how long
+
+There are two maps, and they forget differently.
+
+- The **3D map** (the points in the 3D view) is the detailed one, and the short memory: a
+  point goes when the camera has looked through its place a few times, and when the map is
+  full (250 000 cells) what has not been looked at for longest goes.
+- The **floor plan** (the map from above, also laid on the floor of the 3D view) is the
+  simple one, and the long memory. For every 6 cm square of 30 m by 30 m it keeps whether
+  the floor has been seen to be free there, and how sure it is that something stands
+  there. That goes up quickly with every picture that shows something there and down
+  slowly with every picture that shows floor instead: something seen for a few seconds
+  takes about 8 seconds of seeing floor in its place to be forgotten, and what is not
+  looked at is not forgotten at all. Where the floor plan remembers something that the 3D
+  map no longer has, the map from above shows it lighter. Driving keeps clear of both.
+
+Both are saved every two minutes and when the page server stops (`~/.local/state/obot/`),
+together with where on the map the robot is and how its wheels stand, which is written
+whenever it changes.
+
+When the robot is started again, its odometry starts at zero, and the map is in the
+odometry it was made with. What happens then:
+
+- **The wheels stand as they did**: the robot has not driven anywhere, so it is where it
+  was, and the map is taken up from there. This is the case after a deploy, after
+  `obot-rtd` or the page server were restarted, and after the robot was switched off and
+  on without being moved. The map is then checked against what the camera sees: if the
+  pictures show things where the map has none (the robot was carried somewhere else), the
+  map is put aside and a new one started.
+- **The wheels have turned** (the robot was pushed while off): where it is on the old map
+  is not known. A new map is started; the old one is kept once, as `...previous`.
+
+The line under the 3D view says which it was. What is not there yet: finding the robot's
+place on an old map from what it sees (after it was moved), and joining maps made on
+different days.
 
 ### The cameras correct the odometry (experimental, off)
 

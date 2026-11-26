@@ -152,6 +152,8 @@ async def test_map_from_above_and_driving_to_a_click(robot, daemon):
             let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 0) n++;
             return n / (d.length / 4); }""")
         assert drawn > 0.02
+        # ... and it lies on the floor of the 3D view too
+        await page.wait_for_function("window.obotModel && window.obotModel.world && window.obotModel.world.floorPlan")
 
         # Without "Drive to a click" a click on the map does nothing.
         on_page = """([x, y]) => {
@@ -160,7 +162,7 @@ async def test_map_from_above_and_driving_to_a_click(robot, daemon):
             return [box.left + (v.left + (x / g.cell - g.i0) * v.scale) / v.ratio,
                     box.top + (v.top + (g.height - (y / g.cell - g.j0)) * v.scale) / v.ratio]; }"""
         await page.locator("#plan").scroll_into_view_if_needed()
-        where = await page.evaluate(on_page, [0.4, -0.1])
+        where = await page.evaluate(on_page, [0.3, -0.5])
         await page.mouse.click(*where)
         await page.wait_for_timeout(500)
         assert ui.nav.state == "idle" and robot.state()["mode"] == RobotMode.IDLE
@@ -175,7 +177,7 @@ async def test_map_from_above_and_driving_to_a_click(robot, daemon):
         after = await page.evaluate(on_page, [0.0, 0.0])
         assert abs(after[0] - robot_at[0]) < 2 and abs(after[1] - robot_at[1]) < 2
         far = await page.evaluate(on_page, [1.0, 0.0])
-        assert far[0] - after[0] > 1.8 * (where[0] - robot_at[0]) / 0.4               # a metre is twice as long
+        assert far[0] - after[0] > 1.8 * (where[0] - robot_at[0]) / 0.3               # a metre is twice as long
         await page.mouse.down()
         await page.mouse.move(after[0] - 40, after[1] + 25, steps=4)
         await page.mouse.up()
@@ -185,12 +187,12 @@ async def test_map_from_above_and_driving_to_a_click(robot, daemon):
         assert ui.nav.state == "idle"                                                  # the drag was not a click
 
         # A click now: the robot is enabled and drives to where the click was.
-        where = await page.evaluate(on_page, [0.4, -0.1])
+        where = await page.evaluate(on_page, [0.3, -0.5])
         await page.mouse.click(*where)
         await page.wait_for_function("document.getElementById('world-note').textContent.includes('arrived')",
-                                     timeout=40000)
+                                     timeout=60000)
         at = robot.state()
-        assert ((at["odom_x"] - 0.4) ** 2 + (at["odom_y"] + 0.1) ** 2) ** 0.5 < 0.12
+        assert ((at["odom_x"] - 0.3) ** 2 + (at["odom_y"] + 0.5) ** 2) ** 0.5 < 0.12
         await page.dblclick("#plan")                                                    # the whole map again
         assert await page.evaluate("window.obotPlan.zoom") == 1
 

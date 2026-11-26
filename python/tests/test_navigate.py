@@ -286,11 +286,11 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         await next_state(ws, lambda s: s["world"] and s["world"]["voxels"] > 300, timeout=20)
         assert robot.state()["mode"] == 1                                # idle: nobody has enabled it
 
-        await ws.send_json({"type": "nav", "action": "goto", "x": 0.4, "y": -0.1})
-        state = await next_state(ws, lambda s: s["nav"]["state"] in ("arrived", "failed"), timeout=40)
+        await ws.send_json({"type": "nav", "action": "goto", "x": 0.3, "y": -0.5})
+        state = await next_state(ws, lambda s: s["nav"]["state"] in ("arrived", "failed"), timeout=60)
         assert state["nav"]["state"] == "arrived", state["nav"]
         at = robot.state()
-        assert math.hypot(at["odom_x"] - 0.4, at["odom_y"] + 0.1) < 0.1
+        assert math.hypot(at["odom_x"] - 0.3, at["odom_y"] + 0.5) < 0.1
         assert at["mode"] == 2                                           # it enabled the robot itself
         await asyncio.sleep(0.3)
         assert abs(robot.state()["base_v"]) < 0.02                       # and stands still now
@@ -328,7 +328,10 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         await asyncio.sleep(1.0)
     saved = list(tmp_path.glob("obot/map-*.npz"))
     assert len(saved) == 1
-    # The same run of the daemon: another page server takes the map up again.
+    where = json.loads(next(tmp_path.glob("obot/*.where.json")).read_text())
+    assert math.hypot(where["pose"][0], where["pose"][1]) < 1.5 and len(where["wheels"]) == 2
+
+    # The page server is started again, obot-rtd still running: the map is taken up as it was.
     again = make_server(daemon)
     again.config.cameras.append(ui.config.cameras[-1])
     async with aiohttp_utils.TestClient(aiohttp_utils.TestServer(again.app())) as client:
@@ -336,18 +339,44 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         json.loads((await ws.receive()).data)
         await next_state(ws, lambda s: True)
         assert len(again.world.map) > 300 and again.world.floor_seen() > 100
-        # obot-rtd is started again under a page server that keeps running: its odometry
-        # starts at zero, the map in memory is of other odometry, and is dropped. (The saved
-        # one is left alone: it is still right for the run it was made in.)
+        assert again.world.correction == (0.0, 0.0, 0.0) and again._check is None
+        again.world.stop()                                               # (no new pictures from here on)
         state = robot.state()
-        later = {"t_real_ns": int(state["t_real_ns"]) + 60_000_000_000, "cycle": 5}
-        again.world.stop()                                               # (no new pictures meanwhile)
-        again._take_up_map(later)
-        assert len(again.world.map) == 0 and again.world.floor_seen() == 0
-        again._save_map()
-    third = make_server(daemon)
-    third.config.cameras.append(ui.config.cameras[-1])
-    async with aiohttp_utils.TestClient(aiohttp_utils.TestServer(third.app())) as client:
+
+        def restarted(seconds, wheels):
+            """What obot-rtd says after it has been started again: odometry at zero."""
+            return {"t_real_ns": int(state["t_real_ns"]) + seconds * 1_000_000_000, "cycle": 5,
+                    "q": wheels, "odom_x": 0.0, "odom_y": 0.0, "odom_yaw": 0.0}
+
+        # obot-rtd is started again (a deploy does that) and the wheels stand as they did:
+        # the robot is where it was, and the map goes on from there, odometry at zero or not.
+        was = again.world.base_pose()
+        voxels = len(again.world.map)
+        again._take_up_map(restarted(60, state["q"]))
+        assert len(again.world.map) == voxels
+        assert again.world.correction == pytest.approx(was, abs=2e-3) and "took up the map" in again.world.note
+        # ... which is then checked against what the camera sees. Things where the map has
+        # them: it stays.
+        again.world.agree = [a + b for a, b in zip(again.world.agree, (200, 180, 3), strict=True)]
+        again._check_place()
+        assert again._check is None and again.world.note == "took up the map from before" and len(again.world.map)
+        # The same again, but the camera sees things where the map has none: the robot was
+        # carried somewhere else while it was off. A new map, and the old one put aside.
+        again._take_up_map(restarted(120, state["q"]))
+        again.world.agree = [a + b for a, b in zip(again.world.agree, (200, 30, 90), strict=True)]
+        again._check_place()
+        assert len(again.world.map) == 0 and again.world.floor_seen() == 0 and "not where it was" in again.world.note
+        assert again.world.correction == (0.0, 0.0, 0.0)
+        assert list(tmp_path.glob("obot/map-*.npz.previous"))
+    # A page server that finds the wheels turned since the map was made (the robot was
+    # pushed with obot-rtd off): where it is on the old map is not known. A new map.
+    pushed = make_server(daemon)
+    pushed.config.cameras.append(ui.config.cameras[-1])
+    async with aiohttp_utils.TestClient(aiohttp_utils.TestServer(pushed.app())) as client:
         ws = await client.ws_connect("/ws")
-        await next_state(ws, lambda s: True)
-        assert third._map_frame is not None and third.world.floor_seen() > 100   # the first run's map again
+        await next_state(ws, lambda s: s["world"] and s["world"]["voxels"] > 100, timeout=20)
+        turned = np.array(robot.state()["q"], float)
+        turned[np.nonzero(robot.info.continuous)[0]] += 1.0
+        pushed._take_up_map({"t_real_ns": int(robot.state()["t_real_ns"]) + 300_000_000_000, "cycle": 5, "q": turned,
+                             "odom_x": 0.0, "odom_y": 0.0, "odom_yaw": 0.0})
+        assert len(pushed.world.map) == 0 and "new map" in pushed.world.note

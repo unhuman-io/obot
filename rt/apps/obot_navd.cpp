@@ -40,7 +40,9 @@ enum What : uint32_t {
     kObstacles = 8,  // f64 z min, z max -> u32 count, then i32 ix, iy each
     kSave = 9,       // u32 path length, path, u32 frame length, frame
     kLoad = 10,      // the same -> u8 whether it was taken up
-    kCount = 11,     // -> u64 shown voxels, all voxels, floor squares seen; u32 epoch, rev
+    kCount = 11,
+    kThings = 12,  // -> u32 count, then i32 i, j each: the squares something is remembered to stand in     // -> u64
+                   // shown voxels, all voxels, floor squares seen; u32 epoch, rev
 };
 
 struct Reader {
@@ -125,7 +127,7 @@ bool write_all(int fd, const uint8_t* from, std::size_t n) {
     return true;
 }
 
-constexpr uint32_t kFileMagic = 0x314D424Fu;  // "OBM1"
+constexpr uint32_t kFileMagic = 0x324D424Fu;  // "OBM2"
 
 struct Maps {
     VoxelMap map;
@@ -140,7 +142,8 @@ struct Maps {
 //   pose base <- optical (12 f64), pose map <- optical (12 f64), f64 x, y, yaw of the base
 //   width * height u16 depth, millimetres
 //   with a colour picture: its intrinsics, pose colour optical <- depth optical, width * height * 3 u8 (b, g, r)
-// -> f64 ahead (metres; -1: not looked), u32 points, u32 voxels removed, u64 voxels shown now
+// -> f64 ahead (metres; -1: not looked), u32 points, u32 voxels removed, u64 voxels shown now,
+//    u32 squares with something standing in this picture, of them remembered, of them contradicted
 bool picture(Maps& m, Reader& in, std::vector<uint8_t>& out) {
     const auto flags = in.take<uint32_t>();
     const Intrinsics k = in.intrinsics();
@@ -162,6 +165,7 @@ bool picture(Maps& m, Reader& in, std::vector<uint8_t>& out) {
     const std::size_t n = points.size() / 3;
     double ahead = -1.0;
     uint32_t removed = 0;
+    Agreement agreement;
     std::vector<float> moved(points.size());
     if (flags & 1u) {
         for (std::size_t i = 0; i < n; i++) {
@@ -172,7 +176,7 @@ bool picture(Maps& m, Reader& in, std::vector<uint8_t>& out) {
     }
     if (flags & 2u) {
         if (flags & 1u) {
-            m.floor.see(moved, to_base.m[3], to_base.m[7], x, y, yaw, stride / k.fx, m.way);
+            agreement = m.floor.see(moved, to_base.m[3], to_base.m[7], x, y, yaw, stride / k.fx, m.way);
         }
         removed = static_cast<uint32_t>(m.map.carve(to_map, aligned.data(), k, near, far));
         std::vector<uint8_t> rgb;
@@ -203,6 +207,9 @@ bool picture(Maps& m, Reader& in, std::vector<uint8_t>& out) {
     put(out, static_cast<uint32_t>(n));
     put(out, removed);
     put(out, static_cast<uint64_t>(m.map.shown()));
+    put(out, agreement.things);
+    put(out, agreement.remembered);
+    put(out, agreement.contradicted);
     return true;
 }
 
@@ -237,8 +244,12 @@ bool load(Maps& m, const std::string& path, const std::string& frame) {
     }
     std::fclose(f);
     Reader in{data.data(), data.size()};
-    if (in.take<uint32_t>() != kFileMagic || in.text() != frame || !in.ok) {
-        return false;  // also a map that is in the odometry of another run of obot-rtd
+    if (in.take<uint32_t>() != kFileMagic) {
+        return false;
+    }
+    const std::string saved_in = in.text();
+    if (!in.ok || (frame != "*" && saved_in != frame)) {
+        return false;  // a map that is in the odometry of another run of obot-rtd ("*": whichever)
     }
     VoxelMap map(m.map.voxel());
     FloorSeen floor(m.floor.cell(), m.floor.half());
@@ -341,6 +352,15 @@ int main(int argc, char**) {
             case kLoad: {
                 const std::string path = in.text(), frame = in.text();
                 put(answer, static_cast<uint8_t>(in.ok && load(m, path, frame)));
+                break;
+            }
+            case kThings: {
+                const auto squares = m.floor.things();
+                put(answer, static_cast<uint32_t>(squares.size()));
+                for (const auto& [i, j] : squares) {
+                    put(answer, static_cast<int32_t>(i));
+                    put(answer, static_cast<int32_t>(j));
+                }
                 break;
             }
             case kCount:

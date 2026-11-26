@@ -1,5 +1,6 @@
 #include "doctest.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -208,6 +209,68 @@ TEST_CASE("the floor is free where it is seen, and no farther than what stands o
     REQUIRE(again.restore(saved.data(), saved.size(), used));
     CHECK(again.count() == floor.count());
     CHECK(again.known(-10, -10, 60, 40) == floor.known(-10, -10, 60, 40));
+}
+
+TEST_CASE("the floor plan remembers what stood somewhere, and lets go of it slowly") {
+    FloorSeen floor(0.06, 250);
+    const Way way;
+    // A box 1 m ahead, and the floor in front of it, seen from the origin.
+    std::vector<float> with_box, without;
+    for (int k = 3; k <= 9; k++) {
+        with_box.insert(with_box.end(), {0.1f * static_cast<float>(k), 0.0f, 0.0f});
+    }
+    without = with_box;
+    for (int k = 10; k <= 20; k++) {
+        without.insert(without.end(), {0.1f * static_cast<float>(k), 0.0f, 0.0f});  // floor where the box was
+    }
+    for (float z = 0.1f; z < 0.5f; z += 0.05f) {
+        with_box.insert(with_box.end(), {1.0f, 0.0f, z});
+    }
+    auto there = [&] { return floor.things() == std::vector<std::pair<int, int>>{{16, 0}}; };
+    // one picture is not enough (a stray reading), two are
+    Agreement first = floor.see(with_box, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, way);
+    CHECK(first.things == 1);
+    CHECK(first.remembered == 0);
+    CHECK(floor.things().empty());
+    Agreement second = floor.see(with_box, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, way);
+    CHECK(second.remembered == 0);  // (it was not remembered yet when this picture came)
+    CHECK(there());
+    CHECK(floor.see(with_box, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, way).remembered == 1);
+    for (int i = 0; i < 30; i++) {
+        floor.see(with_box, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, way);
+    }
+    // The box is taken away. A few pictures of floor in its place do not make the plan
+    // forget it; half a minute of them does (at five pictures a second: 33 of them).
+    for (int i = 0; i < 10; i++) {
+        floor.see(without, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, way);
+    }
+    CHECK(there());
+    for (int i = 0; i < 25; i++) {
+        floor.see(without, 0.0, 0.0, 0.0, 0.0, 0.0, 0.01, way);
+    }
+    CHECK(floor.things().empty());
+    // Something where the plan has free floor and nothing near: that contradicts it.
+    Agreement moved = floor.see(with_box, 0.0, 0.0, 0.0, 0.5, 0.0, 0.01, way);  // (the base half a metre to the side)
+    CHECK(moved.things == 1);
+    CHECK(moved.contradicted == 0);  // nobody had seen the floor there
+    floor.stand(1.0, -0.5, 0.2);
+    Agreement elsewhere = floor.see(with_box, 0.0, 0.0, 0.0, -0.5, 0.0, 0.01, way);
+    CHECK(elsewhere.contradicted == 1);
+
+    // kept with the rest
+    floor.see(with_box, 0.0, 0.0, 0.0, 0.5, 0.0, 0.01, way);
+    REQUIRE(floor.things().size() == 1);
+    std::vector<uint8_t> saved;
+    floor.dump(saved);
+    FloorSeen again(0.06, 250);
+    std::size_t used = 0;
+    REQUIRE(again.restore(saved.data(), saved.size(), used));
+    CHECK(used == saved.size());
+    CHECK(again.things() == floor.things());
+    // and shown on the map from above as remembered (4), the 3D map having nothing there
+    const std::vector<uint8_t> grid = again.grid(VoxelMap(0.03), way, 0.38);
+    CHECK(std::count(grid.begin() + 24, grid.end(), 4) == 1);
+    CHECK(std::count(grid.begin() + 24, grid.end(), 3) > 3);  // with its margin, where floor has been seen
 }
 
 TEST_CASE("the map from above: things, free floor, and the margin around things") {

@@ -36,23 +36,39 @@ double look_ahead(const std::vector<float>& base_points, const uint16_t* depth, 
 }
 
 FloorSeen::FloorSeen(double cell, int half)
-    : cell_(cell), half_(half), side_(2 * half + 1), seen_(static_cast<std::size_t>(side_) * side_, 0) {}
+    : cell_(cell),
+      half_(half),
+      side_(2 * half + 1),
+      seen_(static_cast<std::size_t>(side_) * side_, 0),
+      things_(seen_.size(), 0),
+      picture_(seen_.size(), 0) {}
 
 void FloorSeen::clear() {
     std::fill(seen_.begin(), seen_.end(), 0);
+    std::fill(things_.begin(), things_.end(), 0);
+    std::fill(picture_.begin(), picture_.end(), 0);
+    pictures_ = 0;
     stood_i_ = stood_j_ = -1;
+}
+
+std::vector<std::pair<int, int>> FloorSeen::things() const {
+    std::vector<std::pair<int, int>> out;
+    for (std::size_t at = 0; at < things_.size(); at++) {
+        if (things_[at] >= kThere) {
+            out.emplace_back(static_cast<int>(at % side_) - half_, static_cast<int>(at / side_) - half_);
+        }
+    }
+    return out;
 }
 
 std::size_t FloorSeen::count() const {
     return static_cast<std::size_t>(std::count(seen_.begin(), seen_.end(), 1));
 }
 
-void FloorSeen::mark(double x, double y) {
+long FloorSeen::square(double x, double y) const {
     const long i = static_cast<long>(std::floor(x / cell_)) + half_,
                j = static_cast<long>(std::floor(y / cell_)) + half_;
-    if (i >= 0 && i < side_ && j >= 0 && j < side_) {
-        seen_[static_cast<std::size_t>(j) * side_ + i] = 1;
-    }
+    return i >= 0 && i < side_ && j >= 0 && j < side_ ? j * side_ + i : -1;
 }
 
 void FloorSeen::stand(double x, double y, double radius) {
@@ -74,8 +90,8 @@ void FloorSeen::stand(double x, double y, double radius) {
     }
 }
 
-void FloorSeen::see(const std::vector<float>& base_points, double mount_x, double mount_y, double x, double y,
-                    double yaw, double step, const Way& way) {
+Agreement FloorSeen::see(const std::vector<float>& base_points, double mount_x, double mount_y, double x, double y,
+                         double yaw, double step, const Way& way) {
     struct Reading {
         long direction;
         double distance, dx, dy;
@@ -83,7 +99,9 @@ void FloorSeen::see(const std::vector<float>& base_points, double mount_x, doubl
     };
     std::vector<Reading> readings;
     readings.reserve(base_points.size() / 3);
-    bool any_floor = false;
+    const double c = std::cos(yaw), s = std::sin(yaw);
+    // Where something stands in this picture: the squares with at least two readings of it.
+    std::vector<long> standing;
     for (std::size_t i = 0; i + 2 < base_points.size(); i += 3) {
         const double z = base_points[i + 2];
         const bool floor = std::fabs(z) < 0.04;
@@ -91,20 +109,57 @@ void FloorSeen::see(const std::vector<float>& base_points, double mount_x, doubl
         if (!floor && !thing) {
             continue;
         }
-        const double dx = base_points[i] - mount_x, dy = base_points[i + 1] - mount_y;
+        const double bx = base_points[i], by = base_points[i + 1];
+        const double dx = bx - mount_x, dy = by - mount_y;
         readings.push_back({std::lrint(std::atan2(dy, dx) / step), std::hypot(dx, dy), dx, dy, floor});
-        any_floor |= floor;
+        if (thing) {
+            const long at = square(x + c * bx - s * by, y + s * bx + c * by);
+            if (at >= 0) {
+                standing.push_back(at);
+            }
+        }
     }
-    if (!any_floor) {
-        return;
+    pictures_++;
+    Agreement agreement;
+    std::sort(standing.begin(), standing.end());
+    std::vector<long> things;  // the squares with two readings or more, each once
+    for (std::size_t k = 0; k + 1 < standing.size(); k++) {
+        if (standing[k + 1] == standing[k] && (things.empty() || things.back() != standing[k])) {
+            things.push_back(standing[k]);
+        }
+    }
+    // How does that sit with what was remembered before this picture?
+    agreement.things = static_cast<uint32_t>(things.size());
+    for (const long at : things) {
+        bool near = false;
+        const long i = at % side_, j = at / side_;
+        for (long dj = -1; dj <= 1 && !near; dj++) {
+            for (long di = -1; di <= 1 && !near; di++) {
+                const long ni = i + di, nj = j + dj;
+                near = ni >= 0 && ni < side_ && nj >= 0 && nj < side_ && things_[nj * side_ + ni] >= kThere;
+            }
+        }
+        agreement.remembered += near;
+        agreement.contradicted += !near && seen_[at] && things_[at] == 0;
+    }
+    for (const long at : things) {
+        picture_[at] = pictures_;
+        things_[at] = static_cast<uint8_t>(std::min<int>(kMost, things_[at] + kUp));
     }
     std::stable_sort(readings.begin(), readings.end(), [](const Reading& a, const Reading& b) {
         return a.direction != b.direction ? a.direction < b.direction : a.distance < b.distance;
     });
-    const double c = std::cos(yaw), s = std::sin(yaw);
     auto free_at = [&](double lx, double ly) {  // a place in the camera's own flat frame
         const double bx = lx + mount_x, by = ly + mount_y;
-        mark(x + c * bx - s * by, y + s * bx + c * by);
+        const long at = square(x + c * bx - s * by, y + s * bx + c * by);
+        if (at < 0) {
+            return;
+        }
+        seen_[at] = 1;
+        if (picture_[at] != pictures_) {  // floor where something was remembered: a little less sure of it
+            picture_[at] = pictures_;
+            things_[at] = static_cast<uint8_t>(std::max<int>(0, things_[at] - kDown));
+        }
     };
     const int samples = static_cast<int>(1.0 / (cell_ / 2)) + 2;
     auto stretch = [&](double ax, double ay, double bx, double by) {
@@ -131,6 +186,7 @@ void FloorSeen::see(const std::vector<float>& base_points, double mount_x, doubl
             }
         }
     }
+    return agreement;
 }
 
 std::vector<uint8_t> FloorSeen::known(int i0, int j0, int width, int height) const {
@@ -164,7 +220,7 @@ std::vector<uint8_t> FloorSeen::grid(const VoxelMap& map, const Way& way, double
     for (long j = 0; j < side_; j++) {
         for (long i = 0; i < side_; i++) {
             const std::size_t at = static_cast<std::size_t>(j) * side_ + i;
-            if (seen_[at] || occupied[at]) {
+            if (seen_[at] || occupied[at] || things_[at] >= kThere) {
                 a = std::min(a, j);
                 b = std::max(b, j);
                 c = std::min(c, i);
@@ -197,14 +253,17 @@ std::vector<uint8_t> FloorSeen::grid(const VoxelMap& map, const Way& way, double
     for (long j = 0; j < height; j++) {
         for (long i = 0; i < width; i++) {
             const std::size_t from = static_cast<std::size_t>(j + a) * side_ + (i + c);
-            cells[static_cast<std::size_t>(j * width + i)] = occupied[from] ? 2 : seen_[from];
+            cells[static_cast<std::size_t>(j * width + i)] = occupied[from]            ? 2
+                                                             : things_[from] >= kThere ? 4
+                                                                                       : seen_[from];
         }
     }
     // free, but closer to something than keep_clear: the middle of the base cannot be there
     const long reach = static_cast<long>(keep_clear / cell_) + 1;
     for (long j = 0; j < height; j++) {
         for (long i = 0; i < width; i++) {
-            if (cells[static_cast<std::size_t>(j * width + i)] != 2) {
+            const uint8_t here = cells[static_cast<std::size_t>(j * width + i)];
+            if (here != 2 && here != 4) {
                 continue;
             }
             for (long dj = std::max(-reach, -j); dj <= reach && j + dj < height; dj++) {
@@ -230,12 +289,14 @@ std::vector<uint8_t> FloorSeen::grid(const VoxelMap& map, const Way& way, double
 }
 
 void FloorSeen::dump(std::vector<uint8_t>& out) const {
-    // as runs of unseen and seen squares in turn: the grid is mostly one or the other
-    const auto* p = reinterpret_cast<const uint8_t*>(&cell_);
-    out.insert(out.end(), p, p + sizeof(cell_));
+    auto put = [&out](const void* value, std::size_t size) {
+        const auto* p = static_cast<const uint8_t*>(value);
+        out.insert(out.end(), p, p + size);
+    };
+    put(&cell_, sizeof(cell_));
     const auto half = static_cast<int32_t>(half_);
-    p = reinterpret_cast<const uint8_t*>(&half);
-    out.insert(out.end(), p, p + 4);
+    put(&half, 4);
+    // Seen or not, as runs of the one and the other in turn: the grid is mostly one of them.
     std::vector<uint32_t> runs;
     uint8_t value = 0;
     uint32_t run = 0;
@@ -249,10 +310,21 @@ void FloorSeen::dump(std::vector<uint8_t>& out) const {
     }
     runs.push_back(run);
     const auto count = static_cast<uint32_t>(runs.size());
-    p = reinterpret_cast<const uint8_t*>(&count);
-    out.insert(out.end(), p, p + 4);
-    p = reinterpret_cast<const uint8_t*>(runs.data());
-    out.insert(out.end(), p, p + runs.size() * 4);
+    put(&count, 4);
+    put(runs.data(), runs.size() * 4);
+    // What is remembered to stand where: only the squares that have anything.
+    std::vector<uint32_t> where;
+    std::vector<uint8_t> sure;
+    for (std::size_t at = 0; at < things_.size(); at++) {
+        if (things_[at]) {
+            where.push_back(static_cast<uint32_t>(at));
+            sure.push_back(things_[at]);
+        }
+    }
+    const auto remembered = static_cast<uint32_t>(where.size());
+    put(&remembered, 4);
+    put(where.data(), where.size() * 4);
+    put(sure.data(), sure.size());
 }
 
 bool FloorSeen::restore(const uint8_t* data, std::size_t size, std::size_t& used) {
@@ -283,10 +355,29 @@ bool FloorSeen::restore(const uint8_t* data, std::size_t size, std::size_t& used
         seen.insert(seen.end(), run, value);
         value = !value;
     }
-    if (seen.size() != seen_.size()) {
+    uint32_t remembered = 0;
+    if (seen.size() != seen_.size() || at + 4 > size) {
         return false;
     }
+    std::memcpy(&remembered, data + at, 4);
+    at += 4;
+    if (at + static_cast<std::size_t>(remembered) * 5 > size) {
+        return false;
+    }
+    std::vector<uint8_t> things(things_.size(), 0);
+    for (uint32_t k = 0; k < remembered; k++) {
+        uint32_t where = 0;
+        std::memcpy(&where, data + at + static_cast<std::size_t>(k) * 4, 4);
+        if (where >= things.size()) {
+            return false;
+        }
+        things[where] = std::min(kMost, data[at + static_cast<std::size_t>(remembered) * 4 + k]);
+    }
+    at += static_cast<std::size_t>(remembered) * 5;
     seen_ = std::move(seen);
+    things_ = std::move(things);
+    std::fill(picture_.begin(), picture_.end(), 0);
+    pictures_ = 0;
     stood_i_ = stood_j_ = -1;
     used = at;
     return true;
