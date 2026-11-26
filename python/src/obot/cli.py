@@ -89,6 +89,10 @@ def cmd_ui(args) -> int:
         tools.shm_name = args.shm_name
     if args.test_camera:
         tools.cameras = [config_module.CameraConfig(name="test", source="test")]
+    if args.replay_cameras:
+        # The cameras as configured (names, sizes, where they are mounted), fed from a file.
+        for camera in tools.cameras:
+            camera.source = f"replay:{args.replay_cameras}:{'depth' if camera.is_depth else 'color'}"
     if args.sim_cameras:
         tools.cameras = [
             config_module.CameraConfig(name=f"{where} {mode}", source=f"sim:{link}:{mode}")
@@ -174,6 +178,15 @@ def cmd_map_test(args) -> int:
     return asyncio.run(maptest.run(args.url, args.turns, not args.no_drive, out, limits))
 
 
+def cmd_cpu_test(args) -> int:
+    import asyncio
+
+    from .ui import cputest
+
+    limits = {name: getattr(args, name) for name in cputest.LIMITS if getattr(args, name) is not None}
+    return asyncio.run(cputest.run(args.url, args.seconds, args.out, limits))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="obot", description=__doc__.split("\n")[0])
     parser.add_argument("--config", help="robot configuration (default: $OBOT_CONFIG or /etc/obot/robot.toml)")
@@ -195,6 +208,10 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--test-camera", action="store_true", help="show a test pattern instead of real cameras")
     ui.add_argument("--sim-cameras", action="store_true",
                     help="simulated base and gripper cameras (colour and depth) rendered from the robot model")
+    ui.add_argument("--replay-cameras", metavar="STORE",
+                    help="instead of the cameras, for a computer that has none: 'room' plays pictures of a made-up "
+                         "room as the cameras would see it turning on the spot; FILE.npz plays depth pictures "
+                         "recorded on a robot (and a test pattern for colour)")
     ui.set_defaults(func=cmd_ui)
 
     teleop = sub.add_parser("teleop", help="drive with a controller connected to this machine")
@@ -235,6 +252,22 @@ def main(argv: list[str] | None = None) -> int:
         map_test.add_argument("--" + name.replace("_", "-"), type=float, dest=name, metavar="LIMIT",
                               help=f"{text} (default {value:g})")
     map_test.set_defaults(func=cmd_map_test)
+
+    from .ui.cputest import LIMITS as CPU_LIMITS
+
+    cpu_test = sub.add_parser(
+        "cpu-test", help="on the robot: how much of a processor the page server, obot-navd and obot-rtd use",
+        description="To be run on the robot, with the page server running. Measures the processor time of the "
+                    "page server and what belongs to it, and of obot-rtd: with nobody on the page, and with a "
+                    "page open (as a browser has it, without the browser). Moves nothing. "
+                    "Exit status 0: passed, 1: failed, 2: could not be made.")
+    cpu_test.add_argument("--url", default="http://127.0.0.1:8080", help="the page server (default: this machine's)")
+    cpu_test.add_argument("--seconds", type=float, default=15.0, help="how long each of the two is measured")
+    cpu_test.add_argument("--out", help="file for the report (JSON)")
+    for name, (value, text) in CPU_LIMITS.items():
+        cpu_test.add_argument("--" + name.replace("_", "-"), type=float, dest=name, metavar="LIMIT",
+                              help=f"{text} (default {value:g})")
+    cpu_test.set_defaults(func=cmd_cpu_test)
 
     args = parser.parse_args(argv)
     try:

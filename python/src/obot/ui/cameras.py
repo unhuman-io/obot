@@ -32,6 +32,7 @@ Sources:
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 
@@ -287,6 +288,58 @@ class _V4l2Raw:
         self._process.wait()
 
 
+class _Replay:
+    """Pictures from a store, played again and again: for trying things, and for measuring
+    what the page server costs, on a computer with no camera.
+
+    `replay:FILE.npz`: depth pictures recorded on a robot, `frames` in the file (N x height
+    x width, uint16, millimetres). There are no colour pictures in it: a colour camera
+    shows the test pattern.
+    `replay:room`: the made-up room of the simulated cameras, seen from where the camera is
+    mounted while the base turns once on the spot, drawn once when the camera is opened.
+
+    Either way the pictures are stretched to the size the camera is configured with."""
+
+    ROOM_PICTURES = 60
+
+    def __init__(self, store: str, config: CameraConfig):
+        import cv2
+
+        size = (config.width, config.height)
+        if store == "room":
+            from .. import world
+            from ..world import Intrinsics
+            from . import scene
+
+            # (drawn at half the size: drawing is slow, and it is the stretched size that costs later)
+            hfov = config.hfov or (79.6 if config.is_depth else 55.0)
+            k = Intrinsics.from_hfov(config.width // 2, config.height // 2, hfov)
+            mount = world.transform(config.xyz, config.rpy) @ world.OPTICAL
+            turned = [scene.render(world.base_pose(0.0, 0.0, 2 * math.pi * n / self.ROOM_PICTURES) @ mount, k)
+                      for n in range(self.ROOM_PICTURES)]
+            frames = np.stack([depth if config.is_depth else colour for depth, colour in turned])
+        elif config.is_depth:
+            with np.load(store) as recording:
+                frames = recording["frames"]
+            if frames.ndim != 3 or frames.dtype != np.uint16 or not len(frames):
+                raise ValueError(f"{store}: no depth pictures in it (frames: N x height x width, uint16)")
+        else:
+            frames = None
+        if frames is not None and frames.shape[1:3] != (config.height, config.width):
+            frames = np.stack([cv2.resize(f, size, interpolation=cv2.INTER_NEAREST) for f in frames])
+        self._frames, self._next = frames, 0
+
+    def read(self) -> np.ndarray | None:
+        if self._frames is None:
+            return None
+        frame = self._frames[self._next]
+        self._next = (self._next + 1) % len(self._frames)
+        return frame
+
+    def release(self) -> None:
+        pass
+
+
 class Camera:
     def __init__(self, config: CameraConfig, pose=None):
         import cv2  # imported here so the rest of the package works without OpenCV
@@ -307,6 +360,8 @@ class Camera:
         self.error: str | None = None
         self._source = None   # what the pictures come from, once it is open
         self._kind = config.source.partition(":")[0]
+        self._asked = -math.inf   # when latest() was last called
+        self._watched = False
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name=f"camera-{config.name}", daemon=True)
         self._thread.start()
@@ -315,8 +370,15 @@ class Camera:
         self._stop.set()
         self._thread.join(timeout=2)
 
+    # A picture is only made into a JPEG (and a depth picture into colours first) while
+    # somebody asks for it: on a Jetson Nano that is a tenth of a processor for each camera,
+    # and most of the time nobody is looking.
+    WATCHED_S = 2.0
+
     def latest(self) -> tuple[int, bytes | None]:
-        """(sequence number, JPEG bytes). The sequence changes with every new frame."""
+        """(sequence number, JPEG bytes). The sequence changes with every new frame. The
+        JPEG is None until the first frame after somebody asked: ask again."""
+        self._asked = time.monotonic()
         with self._lock:
             return self._sequence, self._jpeg
 
@@ -353,6 +415,8 @@ class Camera:
                 self._kind = "v4l2depth" if c.is_depth else "v4l2"
         if self._kind in ("test", "realsense", "scene"):
             return None
+        if self._kind == "replay":
+            return _Replay(device.rsplit(":", 1)[0], c)
         if self._kind == "v4l2":
             cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
             # MJPG where the camera has it (more frames over USB 2); cameras without it,
@@ -394,10 +458,18 @@ class Camera:
 
     def _read(self, cap, start: float):
         """One frame: (JPEG bytes or None, picture to encode or None, raw picture or None,
-        arrival time), or None for a frame that is not to be shown."""
+        arrival time), or None for a frame that is not to be shown. A depth picture has no
+        picture to encode: that is made of the raw one, if somebody is looking."""
         c = self.config
         if self._kind == "test":
-            return None, self._test_frame(start), None, start
+            return None, self._test_frame(start) if self._watched else None, None, start
+        if self._kind == "replay":
+            frame = cap.read()
+            if c.is_depth:
+                return None, None, frame, start
+            if frame is None:   # (no colour pictures in a recording)
+                frame = self._test_frame(start)
+            return None, frame, frame, start
         if self._kind == "gst":
             return cap.read_jpeg(), None, None, time.monotonic()   # already encoded
         if self._kind == "v4l2depth":
@@ -406,12 +478,12 @@ class Camera:
             # 30 per second whatever is set): drawing those would only cost time.
             if stamp - self._raw_stamp < 0.7 / max(1, c.fps):
                 return None
-            return None, depth_mm_to_image(depth), depth, stamp
+            return None, None, depth, stamp
         if self._kind == "scene":
             from . import scene
 
             depth, colour = scene.render(self._scene_pose(), c.intrinsics())
-            return (None, depth_mm_to_image(depth), depth, start) if c.is_depth else (None, colour, colour, start)
+            return (None, None, depth, start) if c.is_depth else (None, colour, colour, start)
         if self._kind == "realsense":
             parts = c.source.split(":")[1:]
             serial = parts[0] if parts and parts[0] not in ("color", "depth") else ""
@@ -419,7 +491,7 @@ class Camera:
             self.error = None
             if c.is_depth:
                 depth = np.clip(data * 1000, 0, 65535).astype(np.uint16)
-                return None, depth_mm_to_image(depth), depth, time.monotonic()
+                return None, None, depth, time.monotonic()
             return None, data, data, time.monotonic()
         ok, frame = cap.read()
         if not ok:
@@ -430,7 +502,7 @@ class Camera:
         cv2 = self._cv2
         c = self.config
         period = 1.0 / max(1, c.fps)
-        paced = c.source == "test" or c.source.startswith("scene:")   # the others pace themselves
+        paced = c.source == "test" or c.source.startswith(("scene:", "replay:"))   # the others pace themselves
         cap = None
         while not self._stop.is_set():
             try:
@@ -439,24 +511,29 @@ class Camera:
                     self._source = cap
                     self.error = None
                 start = time.monotonic()
+                self._watched = start - self._asked < self.WATCHED_S
                 picture = self._read(cap, start)
                 if picture is None:
                     continue
                 jpeg, frame, raw, stamp = picture
-                if jpeg is None:
-                    ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, c.quality])
-                    jpeg = encoded.tobytes() if ok else None
-                if jpeg is not None:
-                    now = time.monotonic()
-                    with self._lock:
-                        if self._stamp:
-                            rate = 1.0 / max(1e-3, now - self._stamp)
-                            self.fps = rate if not self.fps else 0.9 * self.fps + 0.1 * rate
-                        self._jpeg = jpeg
-                        self._sequence += 1
-                        self._stamp = now
-                        if raw is not None:
-                            self._raw, self._raw_stamp = raw, stamp
+                if jpeg is None and self._kind == "gst":
+                    continue
+                if jpeg is None and self._watched:
+                    if frame is None and raw is not None and c.is_depth:
+                        frame = depth_mm_to_image(raw)
+                    if frame is not None:
+                        ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, c.quality])
+                        jpeg = encoded.tobytes() if ok else None
+                now = time.monotonic()
+                with self._lock:
+                    if self._stamp:
+                        rate = 1.0 / max(1e-3, now - self._stamp)
+                        self.fps = rate if not self.fps else 0.9 * self.fps + 0.1 * rate
+                    self._jpeg = jpeg   # (None while nobody looks: an old picture is not to be shown as new)
+                    self._sequence += 1
+                    self._stamp = now
+                    if raw is not None:
+                        self._raw, self._raw_stamp = raw, stamp
                 if paced:
                     self._stop.wait(max(0.0, period - (time.monotonic() - start)))
             except Exception as e:  # keep trying: cameras get unplugged and come back

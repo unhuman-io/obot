@@ -486,3 +486,85 @@ def test_plot_batch_replaces_missing_values():
     assert "bogus" not in message["y"]
     assert plots.batch(records[:0], ["q/1"], 1, 2, 0) is None
     assert not plots.valid("q/2", 2) and plots.valid("q/1", 2) and plots.valid("base_v", 2) and not plots.valid("q", 2)
+
+
+def test_pictures_are_only_encoded_while_somebody_looks_and_replayed_from_a_store(tmp_path, monkeypatch):
+    import time
+
+    import numpy as np
+
+    from obot.ui import cameras
+
+    def wait_for(what, seconds=5.0):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            got = what()
+            if got is not None and got is not False:
+                return got
+            time.sleep(0.02)
+        raise AssertionError("waited in vain")
+
+    monkeypatch.setattr(cameras.Camera, "WATCHED_S", 0.3)
+    encoded = []
+    real = cameras.depth_mm_to_image
+    monkeypatch.setattr(cameras, "depth_mm_to_image", lambda depth, *a: encoded.append(1) or real(depth, *a))
+
+    # Depth pictures recorded on a robot, smaller than the camera is configured: stretched.
+    recorded = np.stack([np.full((60, 80), 1000 + 100 * n, np.uint16) for n in range(3)])
+    np.savez(tmp_path / "depth.npz", frames=recorded)
+    camera = cameras.Camera(CameraConfig(name="d", source=f"replay:{tmp_path / 'depth.npz'}:depth", width=160,
+                                         height=120, fps=50))
+    try:
+        seen = set()
+        for _ in range(40):
+            stamp, raw = wait_for(lambda: camera.raw() if camera.raw()[1] is not None else None)
+            assert raw.shape == (120, 160) and raw.dtype == np.uint16
+            seen.add(int(raw[0, 0]))
+            time.sleep(0.02)
+        assert seen == {1000, 1100, 1200}                              # all of them, again and again
+        assert camera.fps > 20 and not encoded                         # nobody has asked for a picture: none made
+        assert camera.latest()[1] is None                              # ... until now
+        jpeg = wait_for(lambda: camera.latest()[1])
+        assert jpeg[:2] == b"\xff\xd8" and encoded
+        time.sleep(0.6)                                                # nobody asks any more
+        count = len(encoded)
+        before = camera.raw()[0]
+        time.sleep(0.3)
+        assert len(encoded) == count and camera.raw()[0] > before      # no pictures made, the map still gets its own
+        assert camera.latest()[1] is None                              # and no old picture is handed out as new
+    finally:
+        camera.stop()
+
+    # The made-up room, as a camera turning on the spot sees it: depth and colour.
+    for mode, kind in (("depth", np.uint16), ("color", np.uint8)):
+        camera = cameras.Camera(CameraConfig(name="r", source=f"replay:room:{mode}", width=80, height=60, fps=50,
+                                             xyz=(0.116, 0.0175, 0.143)))
+        try:
+            first = wait_for(lambda camera=camera: camera.raw()[1], seconds=20.0)
+            assert first.dtype == kind and first.shape[:2] == (60, 80) and camera.error is None
+            assert wait_for(lambda camera=camera, first=first: not np.array_equal(camera.raw()[1], first))   # it turns
+        finally:
+            camera.stop()
+
+
+async def test_what_a_page_asks_for_can_be_asked_without_a_browser(robot, daemon):
+    """obot cpu-test's stand-in for a browser gets what a page gets; and it knows its own
+    processes when it sees them."""
+    import asyncio
+    import os
+
+    aiohttp_utils = pytest.importorskip("aiohttp.test_utils")
+    from obot.ui import cputest
+
+    ui = make_server(daemon)
+    ui.config.cameras.append(CameraConfig(name="low depth", source="replay:room:depth", width=160, height=120,
+                                          fps=15, xyz=(0.116, 0.0175, 0.143)))
+    async with aiohttp_utils.TestServer(ui.app()) as server:
+        async with cputest.Page(str(server.make_url("")).rstrip("/")) as page:
+            await asyncio.sleep(4.0)
+            assert page.states > 30 and page.pictures["test"] > 20 and page.pictures["low depth"] > 20
+            assert page.bytes > 100_000
+    me = cputest._processes()[os.getpid()]
+    assert me["seconds"] > 0 and "pytest" in me["arguments"]
+    used = await cputest.measure({"this test": [os.getpid()], "nothing": []}, 0.3)
+    assert 0 <= used["this test"] < 400 and used["nothing"] == 0 and 0 <= used["computer"] <= 100

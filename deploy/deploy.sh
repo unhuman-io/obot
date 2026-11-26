@@ -14,11 +14,13 @@
 #                    that name or serial number, unless it already runs it (repeatable)
 #   --jump HOST      reach the robot through this ssh host
 #   --verify-only    change nothing, only run the checks
+#   --cpu-test       after the checks, measure what the software costs in processor time
+#                    (obot cpu-test on the robot, half a minute); over its limits fails
 #
 # Needs here: cmake, ninja, git, g++-aarch64-linux-gnu (the first build fetches libudev-zero). On the robot: ssh with a key and
 # passwordless sudo. Running it again is safe. Exit status is that of the checks.
 set -eu
-cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0 firmware=""
+cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0 firmware="" cpu_test=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --cpu) cpu="$2"; shift 2 ;;
@@ -30,6 +32,7 @@ while [ $# -gt 0 ]; do
         --jump) jump="$2"; shift 2 ;;
         --firmware) firmware="$firmware $2"; shift 2 ;;
         --verify-only) verify_only=1; shift ;;
+        --cpu-test) cpu_test=1; shift ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
         *) break ;;
     esac
@@ -45,7 +48,14 @@ run() { ssh $opts "$target" "$@"; }
 verify() {
     echo "== checks on $target"
     scp -q $opts "$repo/deploy/verify.sh" "$target:/tmp/obot-verify.sh"
-    run "$env sh /tmp/obot-verify.sh"
+    status=0
+    run "$env sh /tmp/obot-verify.sh" || status=$?
+    if [ "$cpu_test" = 1 ]; then
+        echo "== processor time on $target"
+        # (the page server has only just been started: let it finish that first)
+        run 'sleep 10; "$HOME/obot-venv/bin/obot" cpu-test' || status=$?
+    fi
+    return $status
 }
 if [ "$verify_only" = 1 ]; then verify; exit $?; fi
 

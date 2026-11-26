@@ -259,6 +259,11 @@ class UiServer:
         if camera is None:
             raise web.HTTPNotFound()
         _, jpeg = camera.latest()
+        for _ in range(30):   # (pictures are only encoded once somebody asks: the next one, then)
+            if jpeg is not None or camera.error:
+                break
+            await asyncio.sleep(0.05)
+            _, jpeg = camera.latest()
         if jpeg is None:
             raise web.HTTPServiceUnavailable(text=camera.error or "no frame yet")
         return web.Response(body=jpeg, content_type="image/jpeg", headers={"Cache-Control": "no-store"})

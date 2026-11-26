@@ -168,6 +168,7 @@ obot status | watch | enable | disable | clear | stop
 obot record run.mcap        # every state record; opens in Foxglove, PlotJuggler, Rerun
 obot viz                    # live plots of every joint and the control loop in the Rerun viewer
 obot map-test               # on the robot: it turns and drives by itself, and its map is checked
+obot cpu-test               # on the robot: what the software costs in processor time
 ```
 
 Controller layout (Xbox or any controller the browser reports with the standard mapping):
@@ -434,6 +435,39 @@ degrees, which is 0.01 % over four turns and 3 ms.
 
 The same test runs in CI against the simulated robot (`test_navigate.py`), once as it is
 and once told that the pictures are 60 ms older than they are, which it has to find.
+
+### What it costs in processor time: `obot cpu-test`
+
+```
+obot cpu-test                       # on the robot, page server running; moves nothing
+deploy/deploy.sh --cpu-test ...     # the same after a deployment's checks; over a limit fails it
+```
+
+It measures how much of one processor the page server, obot-navd, the programs that read
+the cameras, and obot-rtd use: for 15 s with nobody on the page, and for 15 s with a page
+open as a browser has it (state and four plots over the websocket, every camera's stream,
+the 3D map's changes, the map from above), without the browser. Exit status 0, 1 (over a
+limit) or 2 (could not be made). `--help` has the limits; the defaults are for a Jetson
+Nano with r1's three cameras and are loose, a robot of its own can be held to less
+(`--idle-pct 25 --page-pct 70`).
+
+A computer with no cameras can stand in for a robot: `obot ui --replay-cameras room` feeds
+the configured cameras (their names, sizes and mounts) with pictures of a made-up room as
+they would see it turning on the spot, and `--replay-cameras FILE.npz` with depth pictures
+recorded on a robot (`frames`: N x height x width, uint16, millimetres). With obot-rtd on
+simulated actuators (`deploy.sh --sim`) and `OBOT_UI_ARGS=--replay-cameras room` in
+`/etc/default/obot-ui`, that is a test rig for this: a Jetson Nano set up so gives
+
+| | page server | obot-navd | obot-rtd |
+|---|---|---|---|
+| nobody on the page | 5 % | 10 % | 2 % |
+| a page open, three camera streams | 45 % | 10 % | 2 % |
+
+Where the page server's time goes with a page open: making JPEGs of the camera pictures
+(about half; OpenCV, not Python), writing them and the websocket to the network, and the
+50 Hz loop that passes the operator's controller on (6 %). Pictures are only made into
+JPEGs while somebody asks for them. Before that was so, the first row read 50 %: three
+cameras' pictures encoded 15 times a second for nobody.
 
 ## Bringing up a real robot
 
