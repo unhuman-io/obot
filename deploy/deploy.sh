@@ -63,7 +63,7 @@ cmake --build "$build" | tail -1
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/obot/bin"
-cp "$build/obot-rtd" "$build/obot-sim-node" "$build/obot-rt-latency" "$stage/obot/bin/"
+cp "$build/obot-rtd" "$build/obot-sim-node" "$build/obot-rt-latency" "$build/obot-navd" "$stage/obot/bin/"
 cp "$repo"/deploy/remote-install.sh "$repo"/deploy/obot-rtd.service "$repo"/deploy/obot-ui.service "$stage/obot/"
 if [ -f "$config" ]; then cp "$config" "$stage/obot/robot.toml"; else cp "$repo/$config" "$stage/obot/robot.toml"; fi
 cp -r "$repo/description" "$stage/obot/description"

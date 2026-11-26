@@ -86,7 +86,7 @@ class Sim:
     """The base in the made-up room, moving exactly as commanded, with its depth camera
     where the robot has it."""
 
-    def __init__(self, start=(0.0, 0.0, 0.0)):
+    def __init__(self, start=(0.0, 0.0, 0.0), native=False):
         config = ToolsConfig()
         config.cameras = [CameraConfig(name="d435_depth", source="realsense:depth", width=320, height=240,
                                        xyz=(0.116, 0.0175, 0.143), rpy=(0.0, 0.0, 0.0), latency=0.0)]
@@ -94,7 +94,7 @@ class Sim:
         self.c = config.cameras[0]
         self.mount = world.transform(self.c.xyz, self.c.rpy) @ world.OPTICAL
         self.camera = StillCamera()
-        self.view = WorldView(config, {self.c.name: self.camera})
+        self.view = WorldView(config, {self.c.name: self.camera}, native=native)
         self.nav = Navigator(self.view, threaded=False)
         self.t = 0.0                                                     # the test's own clock: it runs
         self.view.clock = self.nav.clock = lambda: self.t                # faster than a real one
@@ -148,8 +148,18 @@ def forwards_only(went):
     return bool(np.all(step > -1e-9))
 
 
-def test_drives_around_things_and_finds_its_way_as_it_sees_more(room):
-    sim = Sim()
+@pytest.fixture(params=["python", "obot-navd"])
+def native(request):
+    """Whether the map is kept in Python or by obot-navd: the robot drives the same."""
+    from obot.ui import native as native_map
+
+    if request.param == "obot-navd" and native_map.find() is None:
+        pytest.skip("obot-navd is not built (cmake --preset release in rt/)")
+    return request.param == "obot-navd"
+
+
+def test_drives_around_things_and_finds_its_way_as_it_sees_more(room, native):
+    sim = Sim(native=native)
     # Behind the box, where the base has not looked, with the shirt and the sock straight
     # ahead too close together to pass between. It goes as far towards the place as it has
     # seen the floor to be free, sees more from there, and so on until it is there.
@@ -161,6 +171,7 @@ def test_drives_around_things_and_finds_its_way_as_it_sees_more(room):
           f"never nearer than {nearest_box(went):.2f} m to anything")
     assert nearest_box(went) > 0.25                                       # the base is 0.45 m wide
     assert forwards_only(went)
+    sim.view.close()
 
 
 def test_a_point_inside_something_and_a_point_out_of_reach(room, monkeypatch):
@@ -199,7 +210,7 @@ def test_no_pictures_no_driving(room):
     config = ToolsConfig()
     config.cameras = [CameraConfig(name="d435_depth", source="realsense:depth", width=320, height=240,
                                    xyz=(0.116, 0.0175, 0.143), rpy=(0.0, 0.0, 0.0), latency=0.0)]
-    view = WorldView(config, {"d435_depth": StillCamera()})
+    view = WorldView(config, {"d435_depth": StillCamera()}, native=False)
     view.update_pose(0.0, 0.0, 0.0, 0.0)
     view._seen[:] = True                                                 # (as if it had seen everything)
     nav = Navigator(view, threaded=False)
@@ -279,7 +290,7 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         ws = await client.ws_connect("/ws")
         json.loads((await ws.receive()).data)
         await next_state(ws, lambda s: True)
-        assert len(again.world.map) > 300 and again.world._seen.sum() > 100
+        assert len(again.world.map) > 300 and again.world.floor_seen() > 100
         # obot-rtd is started again under a page server that keeps running: its odometry
         # starts at zero, the map in memory is of other odometry, and is dropped. (The saved
         # one is left alone: it is still right for the run it was made in.)
@@ -287,11 +298,11 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         later = {"t_real_ns": int(state["t_real_ns"]) + 60_000_000_000, "cycle": 5}
         again.world.stop()                                               # (no new pictures meanwhile)
         again._take_up_map(later)
-        assert len(again.world.map) == 0 and again.world._seen.sum() == 0
+        assert len(again.world.map) == 0 and again.world.floor_seen() == 0
         again._save_map()
     third = make_server(daemon)
     third.config.cameras.append(ui.config.cameras[-1])
     async with aiohttp_utils.TestClient(aiohttp_utils.TestServer(third.app())) as client:
         ws = await client.ws_connect("/ws")
         await next_state(ws, lambda s: True)
-        assert third._map_frame is not None and third.world._seen.sum() > 100   # the first run's map again
+        assert third._map_frame is not None and third.world.floor_seen() > 100   # the first run's map again

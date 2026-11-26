@@ -37,3 +37,7 @@ add_test(NAME daemon_sim_smoke
 add_test(NAME daemon_sim_smoke_obot1
          COMMAND obot-rtd --sim --no-rt --duration 2 --shm-name obot_ctest_smoke1
                  --config ${PROJECT_SOURCE_DIR}/../config/obot1.toml)
+
+add_executable(test_nav test_nav.cpp)
+target_link_libraries(test_nav PRIVATE obot_nav obot_test_main obot_warnings)
+add_test(NAME test_nav COMMAND test_nav)

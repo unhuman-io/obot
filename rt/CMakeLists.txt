@@ -100,6 +100,21 @@ target_include_directories(obot_rt PUBLIC include)
 target_include_directories(obot_rt SYSTEM PRIVATE third_party/tomlplusplus)
 target_link_libraries(obot_rt PUBLIC motor_realtime Threads::Threads PRIVATE obot_warnings)
 
+# The map of the surroundings and what is worked out from it: no motors, no threads.
+add_library(obot_nav STATIC
+  src/nav/voxel_map.cpp
+  src/nav/floor.cpp
+)
+target_include_directories(obot_nav PUBLIC include)
+target_link_libraries(obot_nav PRIVATE obot_warnings)
+
+add_executable(obot-navd apps/obot_navd.cpp)
+target_link_libraries(obot-navd PRIVATE obot_nav obot_warnings)
+if(OBOT_RT_STATIC)
+  target_link_options(obot-navd PRIVATE -static)
+endif()
+install(TARGETS obot-navd RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
 foreach(app obot_rtd obot_sim_node obot_rt_latency)
   string(REPLACE "_" "-" exe ${app})
   add_executable(${exe} apps/${app}.cpp)

@@ -23,6 +23,7 @@ import numpy as np
 from .. import world
 from ..config import CameraConfig, ToolsConfig
 from . import model
+from . import native as native_map
 
 # A camera picture is about this old when it arrives. Measured on a Jetson Nano with a D435
 # over V4L2: turning on the spot, the pictures line up best with the wheels 50 ms earlier
@@ -31,10 +32,21 @@ DEFAULT_LATENCY_S = 0.05
 
 
 class WorldView:
-    def __init__(self, config: ToolsConfig, cameras: dict):
+    def __init__(self, config: ToolsConfig, cameras: dict, native: bool | None = None):
+        """native: keep the map in obot-navd (C++) instead of in Python. None: if the
+        program is there. (The experimental odometry correction is Python only.)"""
         self.config = config.world
         self.cameras = cameras
-        self.map = world.WorldMap(self.config.voxel, self.config.max_voxels)
+        self.navd = None
+        program = None if native is False or self.config.correct_odometry else native_map.find()
+        if native and program is None:
+            raise RuntimeError("obot-navd is not there (or correct_odometry is on, which it does not do)")
+        if program is not None:
+            self.navd = native_map.Navd(program, self.config.voxel, self.config.max_voxels, self.SEEN_CELL,
+                                        self.SEEN_HALF, self.WAY_HALF_WIDTH, *self.WAY_HEIGHT)
+            self.map = native_map.NativeMap(self.navd, self.STAND)
+        else:
+            self.map = world.WorldMap(self.config.voxel, self.config.max_voxels)
         self.links = None
         if config.urdf and os.path.isfile(config.urdf):
             self.links = world.LinkPoses(model.load(config.urdf))
@@ -85,6 +97,12 @@ class WorldView:
         if self._thread.is_alive():
             self._thread.join(timeout=2)
 
+    def close(self) -> None:
+        """Stop, and end obot-navd if it keeps the map."""
+        self.stop()
+        if self.navd is not None:
+            self.navd.close()
+
     # --- where things are --------------------------------------------------------------------
 
     def update_pose(self, x: float, y: float, yaw: float, yaw_rate: float, q=None) -> None:
@@ -94,8 +112,9 @@ class WorldView:
         with self._lock:
             self._poses.append((self.clock(), x, y, yaw, yaw_rate, q))
         here = world.compose(self.correction, (x, y, yaw))
-        self.map.add_pose(here[0], here[1])
-        self._stand(here[0], here[1])
+        self.map.add_pose(here[0], here[1])   # (obot-navd notes where the base stands with it)
+        if self.navd is None:
+            self._stand(here[0], here[1])
 
     def _pose_at(self, t: float | None):
         with self._lock:
@@ -157,6 +176,9 @@ class WorldView:
                 latency = 0.0
             taken = stamp - latency
             k = c.intrinsics()
+            if self.navd is not None:
+                used += self._step_native(c, depth, k, stamp, taken)
+                continue
             points = world.depth_to_points(depth, k, self.config.stride, self.config.near, self.config.range)
             if not c.link:
                 self._look_ahead(c, points, stamp, depth)
@@ -249,6 +271,8 @@ class WorldView:
         then height rows of width bytes, the square [j][i] reaching from ((i + i0) * cell,
         (j + j0) * cell): 0 not seen, 1 free floor, 2 something there, 3 free but closer to
         something than `keep_clear` (the middle of the base cannot be there)."""
+        if self.navd is not None:
+            return self.navd.grid(keep_clear)
         import struct
 
         import cv2  # here so that the rest of the module works without OpenCV
@@ -275,6 +299,8 @@ class WorldView:
     def known(self, origin, shape) -> np.ndarray:
         """Which squares of a grid of SEEN_CELL have been seen to be free floor: the grid's
         square [j, i] reaches from ((i + origin[0]) * SEEN_CELL, (j + origin[1]) * SEEN_CELL)."""
+        if self.navd is not None:
+            return self.navd.known(origin, shape)
         out = np.zeros(shape, bool)
         i0, j0 = int(origin[0]) + self.SEEN_HALF, int(origin[1]) + self.SEEN_HALF
         a, b = max(0, -j0), min(shape[0], 2 * self.SEEN_HALF + 1 - j0)
@@ -363,6 +389,27 @@ class WorldView:
                                                   normals[add] @ turned_to_map.T)
             self.match = report  # whole, in one go: the page's thread reads it
 
+    def _step_native(self, c: CameraConfig, depth: np.ndarray, k, stamp: float, taken: float) -> int:
+        """One depth picture, handed to obot-navd with where it was taken from."""
+        for_map = abs(self._pose_at(taken)[4]) <= self.config.max_turn_rate
+        on_base = not c.link
+        if not for_map and not on_base:
+            return 0
+        pose = self.camera_pose(c, taken)
+        colour = None
+        partner = self.colour.get(c.name)
+        if for_map and partner is not None:
+            colour_stamp, picture = self.cameras[partner.name].raw()
+            if picture is not None and abs(colour_stamp - stamp) < 0.5:
+                colour = (picture, partner.intrinsics(), world.invert(self.camera_pose(partner, taken)) @ pose)
+        ahead, _, _, shown = self.navd.picture(
+            depth, k, self.config.stride, self.config.near, self.config.range, self.mounts[c.name] @ world.OPTICAL,
+            pose, self.base_pose(taken), on_base, for_map, colour)
+        self.map.shown = shown
+        if ahead is not None:
+            self.ahead = (ahead, stamp)
+        return int(for_map)
+
     def _run(self) -> None:
         period = 1.0 / max(0.1, self.config.rate)
         while not self._stop.is_set():
@@ -381,6 +428,10 @@ class WorldView:
     def save(self, path: str, frame: str) -> None:
         """Write the map to a file. `frame` names the odometry it is in (a run of obot-rtd):
         with other odometry the same numbers mean other places."""
+        if self.navd is not None:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self.navd.save(path, frame)
+            return
         saved = self.map.dump()
         rows, columns = np.nonzero(self._seen)
         saved.update(frame=np.array(frame), seen=np.stack([rows, columns], axis=1).astype(np.int32),
@@ -395,6 +446,11 @@ class WorldView:
     def load(self, path: str, frame: str) -> bool:
         """Take up the map saved in a file, if it is in the odometry `frame`. Returns
         whether it was."""
+        if self.navd is not None:
+            if not self.navd.load(path, frame):
+                return False
+            self.map.shown = self.navd.count()["shown"]
+            return True
         try:
             with np.load(path) as saved:
                 if str(saved["frame"]) != frame:
@@ -404,7 +460,7 @@ class WorldView:
                 self._seen[saved["seen"][:, 0], saved["seen"][:, 1]] = True
                 self.correction = tuple(float(v) for v in saved["correction"])
             return True
-        except (OSError, KeyError, ValueError, IndexError):
+        except Exception:  # not there, not a map, or a map of another kind (obot-navd's own)
             return False
 
     def clear(self) -> None:
@@ -412,6 +468,10 @@ class WorldView:
         self.plan = world.FloorPlan()
         self._seen[:] = False
         self._stood = None
+
+    def floor_seen(self) -> int:
+        """How many squares of floor have been seen to be free."""
+        return self.navd.count()["floor"] if self.navd is not None else int(self._seen.sum())
 
     def level(self) -> dict[str, dict]:
         """Work out how each base-mounted depth camera is tilted and how high it is from the

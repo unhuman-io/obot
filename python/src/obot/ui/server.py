@@ -299,6 +299,7 @@ class UiServer:
         if self.world:
             self.world.stop()
             self._save_map()
+            self.world.close()
         for camera in self.cameras.values():
             camera.stop()
         if self.robot:

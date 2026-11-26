@@ -69,6 +69,7 @@ $B/obot-rtd --config ../config/obot3.toml $M
 | `--cpu N`, `--no-rt` | override the control CPU; run without realtime setup |
 | `--stats-json FILE`, `--duration SEC` | timing statistics on exit; run for a fixed time |
 | `obot-rt-latency --cpu 5 --duration 60` | wake-up latency of a realtime thread on this machine |
+| `obot-navd` | keeps the map of the surroundings for the operator page (started by `obot ui`, not by hand) |
 | `obot-sim-node --config FILE` | simulated actuators on CAN interfaces (vcan): the firmware's side of the protocol, for testing against the library's CAN code |
 
 ### Modes
@@ -272,6 +273,21 @@ its picture and shows the `xyz` and `rpy` to put in the configuration. Things to
 - `obot ui --sim-cameras` (with `obot-rtd --sim`) shows all of this without a camera: the
   server draws depth and colour pictures of a small made-up room (`scene:depth`,
   `scene:color`).
+
+### Who keeps the map: obot-navd
+
+The map is kept by `obot-navd`, a C++ program that the page server starts and hands every
+depth picture to, with the pose it was taken from. It builds the 3D map, notes where the
+floor has been seen to be free and how far ahead the nearest thing is, and answers the
+pages (map updates, the map from above) and the navigation (what stands where). It is our
+own code, no library: a hash table of voxels and a grid, on the processor. The amount of
+data is small (some 19 000 points per picture) and a graphics processor would spend longer
+fetching it than computing with it.
+
+The same is implemented in Python (`obot.world`, `obot.ui.worldview`), which is what runs
+when `obot-navd` is not installed, and what it is tested against: the same pictures and
+poses go to both, and the maps have to come out the same. Planning a way and following it
+are still Python (`obot.ui.navigate`); they are the next to move.
 
 ### Driving to a place on the map
 

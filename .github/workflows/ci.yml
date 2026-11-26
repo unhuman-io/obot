@@ -112,7 +112,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p dist/obot-rt-aarch64/bin dist/obot-rt-aarch64/config
-          cp rt/build/release/obot-rtd rt/build/release/obot-sim-node rt/build/release/obot-rt-latency dist/obot-rt-aarch64/bin/
+          cp rt/build/release/obot-rtd rt/build/release/obot-sim-node rt/build/release/obot-rt-latency rt/build/release/obot-navd dist/obot-rt-aarch64/bin/
           cp config/*.toml dist/obot-rt-aarch64/config/
           cp -r deploy/. dist/obot-rt-aarch64/
           cp -r description dist/obot-rt-aarch64/
