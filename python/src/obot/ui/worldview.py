@@ -51,6 +51,7 @@ class WorldView:
         self._lock = threading.Lock()
         self._last: dict[str, float] = {}
         self.leveled: dict[str, dict] = {}
+        self.clock = time.monotonic  # what the cameras' stamps are in (a test may use its own)
         # Pose (x, y, yaw) of the wheel odometry's frame in the map's: where the map says
         # the robot is = correction * where the wheels say it is.
         self.correction: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -91,7 +92,7 @@ class WorldView:
         order of joint_names (only looked at if a camera is on a link of the arm)."""
         q = np.array(q, np.float32) if self._on_links and q is not None else None
         with self._lock:
-            self._poses.append((time.monotonic(), x, y, yaw, yaw_rate, q))
+            self._poses.append((self.clock(), x, y, yaw, yaw_rate, q))
         here = world.compose(self.correction, (x, y, yaw))
         self.map.add_pose(here[0], here[1])
         self._stand(here[0], here[1])
@@ -240,7 +241,7 @@ class WorldView:
 
     GRID_MAGIC = 0x3147424F  # "OBG1"
 
-    def grid(self, keep_clear: float = 0.33) -> bytes:
+    def grid(self, keep_clear: float = 0.38) -> bytes:
         """The map from above, for the page: what stands on the floor, where the floor has
         been seen to be free, and where the base cannot be for being too close to something.
 

@@ -1,7 +1,6 @@
 """Driving to a point: the plan, and the whole thing in the made-up room."""
 
 import math
-import time
 
 import numpy as np
 import pytest
@@ -97,17 +96,19 @@ class Sim:
         self.camera = StillCamera()
         self.view = WorldView(config, {self.c.name: self.camera})
         self.nav = Navigator(self.view, threaded=False)
-        self.nav.REPLAN_S = 0.05                                         # the test runs faster than a clock
+        self.t = 0.0                                                     # the test's own clock: it runs
+        self.view.clock = self.nav.clock = lambda: self.t                # faster than a real one
         self.x, self.y, self.yaw = start
         self.w = 0.0
         self.went = [start]
         for _ in range(3):                                               # a few pictures before setting off
+            self.t += 0.2
             self.look()
 
     def look(self):
         self.view.update_pose(self.x, self.y, self.yaw, self.w)
         self.camera.depth = scene.render(world.base_pose(self.x, self.y, self.yaw) @ self.mount, self.c.intrinsics())[0]
-        self.camera.stamp = time.monotonic()
+        self.camera.stamp = self.t
         self.view.step()
 
     def run(self, seconds=90.0, dt=0.02):
@@ -116,6 +117,7 @@ class Sim:
         for tick in range(int(seconds / dt)):
             if not self.nav.active:
                 break
+            self.t += dt
             v, self.w = self.nav.step(dt)
             self.x += v * math.cos(self.yaw) * dt
             self.y += v * math.sin(self.yaw) * dt
@@ -161,16 +163,21 @@ def test_drives_around_things_and_finds_its_way_as_it_sees_more(room):
     assert forwards_only(went)
 
 
-def test_a_point_inside_something_and_a_point_out_of_reach(room):
+def test_a_point_inside_something_and_a_point_out_of_reach(room, monkeypatch):
+    # (a pen behind the robot, closed all round)
+    sides = ((-2.0, 0.7, (1.5, 0.1, 0.6)), (-2.0, -0.7, (1.5, 0.1, 0.6)),
+             (-1.3, 0.0, (0.1, 1.5, 0.6)), (-2.7, 0.0, (0.1, 1.5, 0.6)))
+    pen = tuple(((x, y, 0.3), size, (90, 90, 90)) for x, y, size in sides)
+    monkeypatch.setattr(scene, "BOXES", scene.BOXES + pen)
     sim = Sim()
     # In the middle of the basket: the base goes as near as it can get.
     went = sim.go(1.3, -0.8, seconds=240)
     assert sim.nav.state == "arrived", sim.nav.describe()
     assert 0.25 < nearest_box(went[-1:]) < 0.5
-    # Beyond the wall: there is no way, and it says so.
-    went = sim.go(4.0, 0.0, seconds=240)
+    # Inside the pen: it goes as near as it can, looks around, and says that there is no way.
+    went = sim.go(-2.0, 0.0, seconds=400)
     assert sim.nav.state == "failed", sim.nav.describe()
-    assert "not been seen" in sim.nav.note
+    assert "not been seen" in sim.nav.note and went[-1, 0] < -0.4
     assert nearest_box(np.array(sim.went)) > 0.25
 
 
@@ -181,7 +188,7 @@ def test_stops_for_what_was_not_there_before(room, monkeypatch):
     assert sim.nav.state == "arrived" and abs(sim.yaw - 2 * math.pi) < 0.2
     # A way that is free, as far as the map knows. Then something is put down across it.
     monkeypatch.setattr(scene, "BOXES", scene.BOXES + (((0.6, -0.9, 0.2), (0.1, 1.0, 0.4), (10, 10, 10)),))
-    went = sim.go(1.9, -1.3, seconds=60)
+    went = sim.go(1.9, -1.3, seconds=400)
     # It never touches it: it found another way, or gave up.
     assert nearest_box(np.array(sim.went)) > 0.22
     assert sim.nav.state in ("arrived", "failed")

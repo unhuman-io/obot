@@ -26,9 +26,11 @@ import numpy as np
 
 from .. import world
 
-RADIUS = 0.33  # m: the plan keeps the middle of the wheel axis at least this far from everything
-MARGIN = 0.30  # m: and prefers to stay this much farther away still
-UNSEEN = 0.27  # m: and this far from floor that has not been seen (half the base's width, and a little)
+# The base is 0.45 m wide. A plan is followed to within a few centimetres, and what the map
+# knows of a thing grows while the base drives around it, so the plan keeps well clear:
+RADIUS = 0.38  # m: the middle of the wheel axis stays at least this far from everything in the map
+MARGIN = 0.30  # m: and where there is room, this much farther away still
+UNSEEN = 0.38  # m: floor that has not been seen may have anything on it: the same distance
 CELL = 0.06  # m: grid the plan is made on
 V_MAX, W_MAX = 0.25, 0.7  # m/s, rad/s
 V_ACCEL, W_ACCEL = 0.4, 2.0  # m/s^2, rad/s^2
@@ -64,7 +66,8 @@ class Costmap:
         self.occupied = occupied
         # distance from each cell to the nearest thing, m
         self.clearance = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE) * cell
-        self.blocked = self.clearance < RADIUS
+        from_things = self.clearance
+        self.blocked = from_things < RADIUS
         self.unknown = np.zeros(self.shape, bool)
         beside_unknown = np.zeros(self.shape, bool)
         if known is not None:
@@ -74,8 +77,11 @@ class Costmap:
             self.unknown = ~seen.astype(bool) & ~occupied
             # What has not been seen may be anything, the back of the box the camera saw the
             # front of for one: the base keeps clear of it too.
-            beside_unknown = cv2.distanceTransform((~self.unknown).astype(np.uint8), cv2.DIST_L2,
-                                                   cv2.DIST_MASK_PRECISE) * cell < UNSEEN
+            from_unknown = cv2.distanceTransform((~self.unknown).astype(np.uint8), cv2.DIST_L2,
+                                                 cv2.DIST_MASK_PRECISE) * cell
+            beside_unknown = from_unknown < UNSEEN
+            # (for the price of a step, the unseen counts like a thing)
+            self.clearance = np.minimum(from_things, np.where(self.unknown, from_things, from_unknown))
         # Standing closer to something than the plan would allow (it happens: the base was
         # driven there by hand, and around where it starts little has been seen): the way
         # out is allowed, as long as it gets no closer to anything.
@@ -84,7 +90,7 @@ class Costmap:
             rows, columns = np.ogrid[: self.shape[0], : self.shape[1]]
             around = (rows - sj) ** 2 + (columns - si) ** 2 < (0.6 / cell) ** 2
             if self.blocked[sj, si]:
-                self.blocked &= ~(around & (self.clearance >= min(RADIUS, self.clearance[sj, si]) - cell))
+                self.blocked &= ~(around & (from_things >= min(RADIUS, from_things[sj, si]) - cell))
             beside_unknown &= ~around
         # `solid`: where the base cannot be for what the map knows. `blocked`: where it may
         # not go now, which is that and everything not yet seen to be free.
@@ -225,6 +231,7 @@ class Navigator:
     def __init__(self, view, threaded: bool = True):
         self.view = view
         self.threaded = threaded
+        self.clock = time.monotonic  # (a test may run on a clock of its own)
         self.state = "idle"  # idle, planning, driving, arrived, failed
         self.note = ""
         self.goal: tuple[float, float] | None = None
@@ -274,7 +281,7 @@ class Navigator:
         if self._planning:
             return
         self._planning = True
-        self._planned = time.monotonic()
+        self._planned = self.clock()
         serial = self._serial
         if self.threaded:
             threading.Thread(target=self._plan_now, args=(serial,), name="plan", daemon=True).start()
@@ -301,7 +308,6 @@ class Navigator:
                 self._from = (float(start[0]), float(start[1]))
                 self.path, self._whole, self.state = path, whole, "driving"
                 self._looked = False
-                self._legs += 1
             elif not self._looked:
                 # Perhaps the way has just not been seen yet: look all around once, then try again.
                 self._looked, self._turned, self._last_yaw = True, 0.0, None
@@ -374,7 +380,7 @@ class Navigator:
             return 0.0, 0.0
         if self.state != "driving" or not self.path:
             return 0.0, 0.0
-        now = time.monotonic()
+        now = self.clock()
         x, y, yaw = self.view.base_pose()
         gx, gy = self.path[-1]
         if math.hypot(gx - x, gy - y) < ARRIVED:
@@ -382,6 +388,7 @@ class Navigator:
                 self.state, self.note, self.path = "arrived", "", []
             else:
                 self.state, self.path = "planning", []  # as far as was known: what is known now?
+                self._legs += 1
                 self._plan()
             return 0.0, 0.0
         if now - self._planned > self.REPLAN_S:

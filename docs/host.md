@@ -275,14 +275,18 @@ its picture and shows the `xyz` and `rpy` to put in the configuration. Things to
 
 ### Driving to a place on the map
 
-**Drive to a click**, then a click on the floor in the 3D view: the base drives there by
-itself. **Look around** turns it once on the spot, so that the camera has seen all there is
+**Drive to a click**, then a click on the floor in the 3D view or on the **map from
+above** under it: the base drives there by itself. The map from above shows what stands
+on the floor (dark), the floor seen to be free (light), the margin around things in which
+the middle of the base cannot be (shaded), and the robot's footprint to scale. **Look around** turns it once on the spot, so that the camera has seen all there is
 to see from where it stands. **Stop**, or touching a controller, ends it at once.
 
 How it decides:
 
 - It only drives where it has *seen the floor to be free*, and keeps the middle of the
-  wheel axis 0.33 m from everything in the map and 0.27 m from floor it has not seen. The
+  wheel axis 0.38 m from everything in the map and from floor it has not seen (the base
+  is 0.45 m wide: that leaves some 15 cm either side, less while it rounds something
+  whose far side it has not seen yet). A gap has to be 0.76 m wide to be driven. The
   map starts empty, and the camera looks forward only, so at first that is a wedge in front
   of the robot.
 - To a place it has not seen a way to, it plans as if the unseen were free, drives the
