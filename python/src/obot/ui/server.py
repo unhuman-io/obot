@@ -154,6 +154,10 @@ class UiServer:
             "continuous": [bool(x) for x in info.continuous] if info else [],
             "has_base": bool(info and info.has_base),
             "cameras": list(self.cameras),
+            # Depth cameras' pictures come grey (nearest is brightest), and with them the
+            # colours to paint them in: [r, g, b] for each of the 256 greys.
+            "depth_cameras": [name for name, camera in self.cameras.items() if camera.config.is_depth],
+            "depth_colours": self._depth_colours(),
             "sim_cameras": [
                 {"name": c.name, "link": c.source.split(":")[1], "mode": (c.source.split(":") + ["color"])[2]}
                 for c in self.config.cameras if c.source.startswith("sim:") and self.enable_cameras
@@ -163,6 +167,13 @@ class UiServer:
             "plot_signals": plots.signals(info.joint_names) if info else [],
             "plot_rates": [r for r in plots.RATES if info and r <= round(1 / info.period_s)],
         }
+
+    def _depth_colours(self) -> list:
+        if not any(camera.config.is_depth for camera in self.cameras.values()):
+            return []
+        from .cameras import depth_colours  # (needs OpenCV, as the cameras do)
+
+        return depth_colours()[:, ::-1].tolist()
 
     async def _info(self, request: web.Request) -> web.Response:
         return web.json_response(self._info_dict())

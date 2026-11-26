@@ -351,6 +351,17 @@ def test_depth_pictures_are_coloured_by_distance():
     assert image[0, 3, 0] > 100 and image[0, 3, 2] < 100                              # far: blue
     assert (depth_to_image(depth.astype(np.float32) / 1000)[0, :4] == image[0, :4]).all()
 
+    # What goes to the page is grey, and the page paints it with the same colours.
+    from obot.ui.cameras import depth_colours, depth_mm_to_grey
+
+    grey = depth_mm_to_grey(depth)
+    assert grey.dtype == np.uint8 and grey[0, 0] == 0 and grey[0, 4] == 0             # no reading
+    assert grey[0, 1] > grey[0, 2] > grey[0, 3] >= 1                                  # nearer is brighter
+    assert (depth_colours()[grey] == image).all() and depth_colours()[0].tolist() == [0, 0, 0]
+    wide = np.full((480, 640), 1500, np.uint16)
+    assert depth_mm_to_grey(wide, width=320).shape == (240, 320)
+    assert depth_mm_to_grey(wide, width=640).shape == (480, 640)
+
 
 def test_realsense_video_devices_are_found_by_what_they_are(tmp_path, monkeypatch):
     from obot.ui import cameras
@@ -506,8 +517,8 @@ def test_pictures_are_only_encoded_while_somebody_looks_and_replayed_from_a_stor
 
     monkeypatch.setattr(cameras.Camera, "WATCHED_S", 0.3)
     encoded = []
-    real = cameras.depth_mm_to_image
-    monkeypatch.setattr(cameras, "depth_mm_to_image", lambda depth, *a: encoded.append(1) or real(depth, *a))
+    real = cameras.depth_mm_to_grey
+    monkeypatch.setattr(cameras, "depth_mm_to_grey", lambda depth, **k: encoded.append(1) or real(depth, **k))
 
     # Depth pictures recorded on a robot, smaller than the camera is configured: stretched.
     recorded = np.stack([np.full((60, 80), 1000 + 100 * n, np.uint16) for n in range(3)])

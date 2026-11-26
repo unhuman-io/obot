@@ -50,6 +50,20 @@ async def test_page_shows_the_robot_and_drives_it(robot, daemon):
             timeout=10000,
         )
 
+        # A depth camera's picture comes grey from the server and is painted here: near red, far blue.
+        depth_picture = page.locator("#cameras img[alt='room depth camera']")
+        await page.wait_for_function(
+            "(() => { const i = document.querySelector(\"#cameras img[alt='room depth camera']\");"
+            " return i && i.naturalWidth > 0 && i.style.filter.includes('depth-colours'); })()", timeout=10000)
+        import io
+
+        import numpy as np
+        from PIL import Image
+
+        shown = np.asarray(Image.open(io.BytesIO(await depth_picture.screenshot())).convert("RGB")).astype(int)
+        coloured = np.abs(shown[..., 0] - shown[..., 2]) > 60
+        assert coloured.mean() > 0.3, coloured.mean()                 # (a grey picture has none)
+
         # The robot is drawn from its URDF and follows the joints.
         await page.wait_for_function("window.obotModel && window.obotModel.links > 5", timeout=15000)
         assert await page.locator("#model canvas").count() == 1

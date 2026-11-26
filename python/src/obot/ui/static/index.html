@@ -166,6 +166,22 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const query = location.search;   // carries ?token=... to the WebSocket and the camera streams
+
+// A depth camera's picture comes grey, nearest brightest: colouring it is cheap here and was
+// a tenth of a processor on the robot. The colours come with the page's info; they are made
+// into a filter that replaces each grey by its colour.
+function depthColours() {
+  if (!document.getElementById("depth-colours") && (info.depth_colours || []).length === 256) {
+    const channel = (k) => info.depth_colours.map((c) => (c[k] / 255).toFixed(3)).join(" ");
+    const holder = document.createElement("div");
+    holder.innerHTML = `<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="depth-colours" color-interpolation-filters="sRGB"><feComponentTransfer>
+        <feFuncR type="table" tableValues="${channel(0)}"/><feFuncG type="table" tableValues="${channel(1)}"/>
+        <feFuncB type="table" tableValues="${channel(2)}"/></feComponentTransfer></filter></svg>`;
+    document.body.append(holder.firstElementChild);
+  }
+  return "url(#depth-colours)";
+}
 let info = { joints: [], arm_joints: [], q_min: [], q_max: [], continuous: [], cameras: [] };
 let ws = null;
 let wsOpenSince = 0;
@@ -205,6 +221,7 @@ function showInfo(next) {
       const img = document.createElement("img");
       img.alt = name + " camera";
       img.src = "/camera/" + encodeURIComponent(name) + ".mjpg" + query;
+      if ((info.depth_cameras || []).includes(name)) img.style.filter = depthColours();
       const caption = document.createElement("figcaption");
       caption.id = "cam-" + name;
       caption.textContent = name;

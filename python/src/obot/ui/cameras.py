@@ -93,20 +93,48 @@ def _roomy(pipe) -> None:
         pass  # not a pipe, or not allowed: the default size works too
 
 
-def depth_mm_to_image(depth_mm: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
-    """Depth in millimetres as a false colour picture: near is warm, far is cool, no reading
-    (0, or the top of the sensor's range) is black.
+# The page's picture of a depth camera is made no wider than this: a depth picture has less
+# in it than its pixels, and a quarter of them is a quarter of the work.
+DEPTH_VIEW_WIDTH = 320
 
-    Done with OpenCV calls only. They are several times faster than indexing a colour table
-    with numpy, and they do not hold the interpreter lock, which the other camera threads
-    and the page server need (on a Jetson Nano that is the difference between 9 and 15
-    depth frames per second)."""
+
+def depth_mm_to_grey(depth_mm: np.ndarray, max_depth_m: float = 4.0, width: int | None = None) -> np.ndarray:
+    """Depth in millimetres as a grey picture: 255 is nearest, 1 is `max_depth_m` and beyond,
+    0 is no reading (0, or the top of the sensor's range). With `width`, every second (third,
+    ...) pixel only, so that the picture is no wider than that.
+
+    This is what goes to the page, which paints it (depth_colours): made into colours here,
+    a 640 x 480 picture cost a Jetson Nano 5.5 ms and its JPEG 5.1 ms, 15 times a second;
+    grey and half the size it is 1.5 ms in all.
+
+    Done with OpenCV calls only. They are several times faster than numpy for this, and
+    they do not hold the interpreter lock, which the other camera threads and the page
+    server need."""
     import cv2
 
+    if width and depth_mm.shape[1] > width:
+        step = -(-depth_mm.shape[1] // width)
+        depth_mm = np.ascontiguousarray(depth_mm[::step, ::step])
     limit = int(max_depth_m * 1000)
-    near = cv2.convertScaleAbs(cv2.min(depth_mm, limit), alpha=-255.0 / limit, beta=255.0)
-    image = cv2.applyColorMap(near, cv2.COLORMAP_TURBO)
-    return cv2.bitwise_and(image, image, mask=cv2.inRange(depth_mm, 1, 64999))
+    near = cv2.convertScaleAbs(cv2.min(depth_mm, limit), alpha=-254.0 / limit, beta=255.0)
+    return cv2.bitwise_and(near, cv2.inRange(depth_mm, 1, 64999))
+
+
+def depth_colours() -> np.ndarray:
+    """The colour (BGR) for each grey value of depth_mm_to_grey: near is warm, far is cool,
+    no reading is black. 256 x 3."""
+    import cv2
+
+    colours = cv2.applyColorMap(np.arange(256, dtype=np.uint8).reshape(-1, 1), cv2.COLORMAP_TURBO)[:, 0].copy()
+    colours[0] = 0
+    return colours
+
+
+def depth_mm_to_image(depth_mm: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
+    """Depth in millimetres as a false colour picture (BGR), as the page shows it."""
+    import cv2
+
+    return cv2.applyColorMap(depth_mm_to_grey(depth_mm, max_depth_m), depth_colours().reshape(256, 1, 3))
 
 
 def depth_to_image(depth_m: np.ndarray, max_depth_m: float = 4.0) -> np.ndarray:
@@ -520,7 +548,7 @@ class Camera:
                     continue
                 if jpeg is None and self._watched:
                     if frame is None and raw is not None and c.is_depth:
-                        frame = depth_mm_to_image(raw)
+                        frame = depth_mm_to_grey(raw, width=DEPTH_VIEW_WIDTH)   # (the page paints it)
                     if frame is not None:
                         ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, c.quality])
                         jpeg = encoded.tobytes() if ok else None

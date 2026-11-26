@@ -461,13 +461,24 @@ simulated actuators (`deploy.sh --sim`) and `OBOT_UI_ARGS=--replay-cameras room`
 | | page server | obot-navd | obot-rtd |
 |---|---|---|---|
 | nobody on the page | 5 % | 10 % | 2 % |
-| a page open, three camera streams | 45 % | 10 % | 2 % |
+| a page open, three camera streams | 24 % | 9 % | 2 % |
 
 Where the page server's time goes with a page open: making JPEGs of the camera pictures
-(about half; OpenCV, not Python), writing them and the websocket to the network, and the
-50 Hz loop that passes the operator's controller on (6 %). Pictures are only made into
-JPEGs while somebody asks for them. Before that was so, the first row read 50 %: three
-cameras' pictures encoded 15 times a second for nobody.
+(OpenCV, not Python), writing them and the websocket to the network, and the 50 Hz loop
+that passes the operator's controller on (6 %). Two things keep it there:
+
+- Pictures are only made into JPEGs while somebody asks for them. Before that was so, the
+  first row read 50 %: three cameras' pictures encoded 15 times a second for nobody.
+- A depth camera's picture goes to the page grey (nearest brightest) and at most 320
+  pixels wide, and the page paints it. Colouring a 640 x 480 picture on the robot cost
+  5.5 ms and its JPEG 5.1 ms; grey and half the size it is 1.5 ms in all. Before, the
+  second row read 45 %. `/camera/<name>.jpg` and `.mjpg` of a depth camera are therefore
+  grey; `depth_colours` in `/api/info` are the colours.
+
+The hardware JPEG encoder of a Jetson (`nvjpegenc`) takes 0.6 ms of processor for a
+640 x 480 picture where OpenCV takes 5; fed from Python through a pipe that advantage is
+mostly gone (measured: 3 to 5 ms in all). It pays where the camera feeds it without the
+picture passing through Python, as the `gst:` source of the CSI camera does.
 
 ## Bringing up a real robot
 
