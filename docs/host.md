@@ -455,7 +455,7 @@ yet**: it is what is known about a square.
 |---|---|
 | the network | FCN-ResNet18 trained on SUN RGB-D, from the jetson-inference project (MIT): 21 classes of things in rooms (floor, wall, chair, table, clothes, person, ...) |
 | what it looks at, what it says | a 512 x 400 picture; one class for each 32 x 32 pixels of it, 16 x 13 in all |
-| on a Jetson Nano | 39 ms a picture on the GPU; at 3 pictures a second obot-segd uses 1.5 % of a processor and the page server 3 % more, the GPU is busy two fifths of the time; 870 MB of memory |
+| on a Jetson Nano | 39 ms a picture on the GPU. At 3 pictures a second: the GPU is busy a tenth of the time (its load read 200 times over 10 s; tegrastats' single readings say anything from 0 to 45 %), obot-segd uses 1.5 % of a processor and the page server 3 % more. Memory: 285 MB on the GPU, which is the same 4 GB, and 870 MB resident when it has just loaded, 215 MB once the unused part has been swapped out |
 | making it ready | 3.5 minutes, once per robot (TensorRT builds the network for that GPU); 10 s to load after that |
 
 How good it is: on four pictures from r1's cameras in a garage, it finds the floor, and gets
