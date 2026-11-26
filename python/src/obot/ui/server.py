@@ -96,6 +96,7 @@ class UiServer:
         self._nav_sent = False
         self._nav_enable = 0.0
         self._map_frame: str | None = None
+        self._run_started: float | None = None  # when the obot-rtd that was last connected started
         self._plot_t0: int | None = None
         self.sockets: dict[web.WebSocketResponse, Operator] = {}
         self.local: Operator | None = None
@@ -321,8 +322,16 @@ class UiServer:
                 self.world.save(self.map_path, self._map_frame)
 
     def _take_up_map(self, state) -> None:
-        """Once the daemon is there: which run of it is this, and is the saved map from it?"""
+        """Once the daemon is there: which run of it is this? A map made in another run is
+        in other odometry and is dropped, also the one in memory (the daemon was restarted
+        under a page server that kept running). If there is no map, the saved one is taken
+        up, if it is from this run."""
         started = (int(state["t_real_ns"]) - int(state["cycle"]) * round(self.robot.info.period_s * 1e9)) / 1e9
+        if self._run_started is not None and abs(started - self._run_started) > 2.0 and self.world is not None:
+            self.world.clear()
+            if self.nav is not None:
+                self.nav.cancel("stopped: the robot's odometry started again")
+        self._run_started = started
         self._map_frame = str(round(started))
         if self.world is not None and not len(self.world.map):
             for frame in (self._map_frame, str(round(started) - 1), str(round(started) + 1)):

@@ -280,3 +280,18 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         json.loads((await ws.receive()).data)
         await next_state(ws, lambda s: True)
         assert len(again.world.map) > 300 and again.world._seen.sum() > 100
+        # obot-rtd is started again under a page server that keeps running: its odometry
+        # starts at zero, the map in memory is of other odometry, and is dropped. (The saved
+        # one is left alone: it is still right for the run it was made in.)
+        state = robot.state()
+        later = {"t_real_ns": int(state["t_real_ns"]) + 60_000_000_000, "cycle": 5}
+        again.world.stop()                                               # (no new pictures meanwhile)
+        again._take_up_map(later)
+        assert len(again.world.map) == 0 and again.world._seen.sum() == 0
+        again._save_map()
+    third = make_server(daemon)
+    third.config.cameras.append(ui.config.cameras[-1])
+    async with aiohttp_utils.TestClient(aiohttp_utils.TestServer(third.app())) as client:
+        ws = await client.ws_connect("/ws")
+        await next_state(ws, lambda s: True)
+        assert third._map_frame is not None and third.world._seen.sum() > 100   # the first run's map again
