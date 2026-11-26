@@ -67,6 +67,7 @@ class Costmap:
         # distance from each cell to the nearest thing, m
         self.clearance = cv2.distanceTransform((~occupied).astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE) * cell
         from_things = self.clearance
+        self.from_things = from_things
         self.blocked = from_things < RADIUS
         self.unknown = np.zeros(self.shape, bool)
         beside_unknown = np.zeros(self.shape, bool)
@@ -135,6 +136,64 @@ class Costmap:
         d = np.hypot(rows - j, columns - i)
         best = int(d.argmin())
         return self.centre(int(columns[best]), int(rows[best])) if d[best] * self.cell <= within else None
+
+    def frontier(self, start, centre, radius: float, been=()) -> tuple[float, float] | None:
+        """Where to go to see more: the place nearest by the way there, among those the base
+        can reach now, that lies at the edge of what has been seen. None if there is none.
+
+        Only edges that are worth a visit count: not the unseen inside or right behind a
+        thing (within 0.4 m of something in the map), not specks, nothing farther than
+        `radius` from `centre`, and nothing within half a metre of the places in `been`."""
+        import cv2  # here so that the rest of the package works without OpenCV
+
+        si, sj = self.index(start)
+        if not self.inside(si, sj):
+            return None
+        width, height = self.shape[1], self.shape[0]
+        # everything that can be reached, and at what price
+        blocked, price = self.blocked.ravel(), self.price.ravel()
+        start_at = sj * width + si
+        cost = {start_at: 0.0}
+        queue = [(0.0, start_at)]
+        steps = [(di, dj, math.hypot(di, dj)) for di in (-1, 0, 1) for dj in (-1, 0, 1) if di or dj]
+        while queue:
+            so_far, at = heapq.heappop(queue)
+            if so_far > cost[at]:
+                continue
+            j, i = divmod(at, width)
+            for di, dj, length in steps:
+                ni, nj = i + di, j + dj
+                if not (0 <= ni < width and 0 <= nj < height):
+                    continue
+                to = nj * width + ni
+                if blocked[to]:
+                    continue
+                new = so_far + length * price[to]
+                if new < cost.get(to, math.inf):
+                    cost[to] = new
+                    heapq.heappush(queue, (new, to))
+        reached = np.zeros(self.shape, bool)
+        reached.ravel()[list(cost)] = True
+        open_unseen = self.unknown & (self.from_things > 0.4)
+        if not open_unseen.any():
+            return None
+        to_unseen = cv2.distanceTransform((~open_unseen).astype(np.uint8), cv2.DIST_L2,
+                                          cv2.DIST_MASK_PRECISE) * self.cell
+        edge = reached & (to_unseen < UNSEEN + 0.2)
+        # not a speck: half a dozen such squares within 20 cm
+        edge &= cv2.boxFilter(edge.astype(np.float32), -1, (7, 7), normalize=False) >= 6
+        rows, columns = np.nonzero(edge)
+        best, best_cost = None, math.inf
+        for j, i in zip(rows.tolist(), columns.tolist(), strict=True):
+            x, y = self.centre(i, j)
+            if math.hypot(x - centre[0], y - centre[1]) > radius:
+                continue
+            if any(math.hypot(x - bx, y - by) < 0.5 for bx, by in been):
+                continue
+            c = cost[j * width + i]
+            if c < best_cost:
+                best, best_cost = (x, y), c
+        return best
 
     def plan(self, start, goal) -> list[tuple[float, float]] | None:
         """The way from start to goal as a few corner points (the last is the goal), or
@@ -246,16 +305,21 @@ class Navigator:
         self._whole = True  # the plan goes all the way to the goal
         self._legs = 0  # plans driven for this goal
         self._turned, self._last_yaw = 0.0, None
+        self._explore: dict | None = None  # mapping by itself: where from, how far, where it has been
 
     @property
     def active(self) -> bool:
-        return self.state in ("planning", "driving", "looking")
+        return self.state in ("planning", "driving", "looking") or self._explore is not None
 
     def describe(self) -> dict:
-        return {"state": self.state, "note": self.note, "goal": self.goal,
+        return {"state": self.state, "note": self.note, "goal": self.goal, "exploring": self._explore is not None,
                 "path": [[round(x, 3), round(y, 3)] for x, y in self.path]}
 
     def goto(self, x: float, y: float) -> None:
+        self._explore = None
+        self._goto(x, y)
+
+    def _goto(self, x: float, y: float) -> None:
         self._serial += 1
         self.goal, self.path, self.state, self.note = (float(x), float(y)), [], "planning", ""
         self._blocked_since = None
@@ -265,15 +329,80 @@ class Navigator:
 
     def look_around(self) -> None:
         """Turn once on the spot, so that the camera has seen all there is to see from here."""
+        self._explore = None
+        self._look("looking around")
+
+    def _look(self, note: str) -> None:
         self._serial += 1
         self.goal, self.path = None, []
         self._looked, self._turned, self._last_yaw = True, 0.0, None
-        self.state, self.note = "looking", "looking around"
+        self.state, self.note = "looking", note
 
     def cancel(self, note: str = "stopped") -> None:
         if self.active:
             self._serial += 1
+            self._explore = None
             self.state, self.note, self.path = "idle", note, []
+
+    # --- mapping by itself ---------------------------------------------------------------------
+
+    EXPLORE_S = 900.0  # s: after this long it stops by itself
+
+    def explore(self, radius: float = 4.0) -> None:
+        """Map what can be reached within `radius` metres of here, without being told where
+        to go: look around, drive to the nearest edge of what has been seen, look around
+        there, and so on until there is no such edge left to drive to."""
+        x, y, _ = self.view.base_pose()
+        self._explore = {"from": (x, y), "radius": float(radius), "been": [], "phase": "look",
+                         "started": self.clock()}
+        self._look("mapping: looking around")
+
+    def _explore_on(self) -> None:
+        """One thing done (a look around, a drive): what next?"""
+        e = self._explore
+        if self.clock() - e["started"] > self.EXPLORE_S:
+            self._explore = None
+            self.state, self.note = "arrived", f"stopped mapping after {self.EXPLORE_S / 60:.0f} minutes"
+            return
+        if e["phase"] == "drive":
+            e["been"].append(self.goal)  # whether it got there or not: not there again
+            if self.state == "arrived":
+                e["phase"] = "look"
+                self._look("mapping: looking around")
+                return
+        e["phase"] = "choose"
+        self._serial += 1
+        self.goal, self.path, self.state, self.note = None, [], "planning", "mapping: choosing where to look next"
+        self._planning = True
+        serial = self._serial
+        if self.threaded:
+            threading.Thread(target=self._choose, args=(serial,), name="explore", daemon=True).start()
+        else:
+            self._choose(serial)
+
+    def _choose(self, serial: int) -> None:
+        target = None
+        try:
+            e = self._explore
+            start = self.view.base_pose()[:2]
+            costmap = Costmap(self.view.map.obstacles(), np.asarray(start), np.asarray(start), self.view.known,
+                              pad=e["radius"] + math.hypot(start[0] - e["from"][0], start[1] - e["from"][1]) + 1.0)
+            target = costmap.frontier(start, e["from"], e["radius"], e["been"])
+        except Exception as error:  # (no map to choose from must not leave it hanging)
+            if serial == self._serial:
+                self._explore = None
+                self.state, self.note = "failed", f"mapping failed: {error}"
+            return
+        finally:
+            self._planning = False
+        if serial != self._serial or self._explore is None:
+            return
+        if target is None:
+            self._explore = None
+            self.state, self.note = "arrived", "mapped all it can reach"
+        else:
+            self._explore["phase"] = "drive"
+            self._goto(*target)
 
     # --- the plan ------------------------------------------------------------------------
 
@@ -330,6 +459,9 @@ class Navigator:
     def step(self, dt: float) -> tuple[float, float]:
         """Forward and turning speed to command now."""
         v, w = self._wanted()
+        if self._explore is not None and self.state in ("arrived", "failed") and not self._planning:
+            self._explore_on()
+            v = w = 0.0
         self._v = _approach(self._v, v, V_ACCEL * dt) if v > 0 else 0.0  # stopping is not eased
         self._w = _approach(self._w, w, W_ACCEL * dt)
         return self._v, self._w

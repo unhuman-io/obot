@@ -165,14 +165,46 @@ async def test_map_from_above_and_driving_to_a_click(robot, daemon):
         await page.wait_for_timeout(500)
         assert ui.nav.state == "idle" and robot.state()["mode"] == RobotMode.IDLE
 
-        # With it: the robot is enabled and drives to where the click was.
+        # The wheel zooms in about where the pointer is (the robot stays under it), a drag
+        # moves the map, and neither sends the robot anywhere.
         await page.click("#nav-goto")
-        await page.locator("#plan").scroll_into_view_if_needed()
+        robot_at = await page.evaluate(on_page, [0.0, 0.0])
+        await page.mouse.move(*robot_at)
+        await page.mouse.wheel(0, -500)
+        await page.wait_for_function("window.obotPlan.zoom > 1.8")
+        after = await page.evaluate(on_page, [0.0, 0.0])
+        assert abs(after[0] - robot_at[0]) < 2 and abs(after[1] - robot_at[1]) < 2
+        far = await page.evaluate(on_page, [1.0, 0.0])
+        assert far[0] - after[0] > 1.8 * (where[0] - robot_at[0]) / 0.4               # a metre is twice as long
+        await page.mouse.down()
+        await page.mouse.move(after[0] - 40, after[1] + 25, steps=4)
+        await page.mouse.up()
+        moved = await page.evaluate(on_page, [0.0, 0.0])
+        assert abs(moved[0] - (after[0] - 40)) < 3 and abs(moved[1] - (after[1] + 25)) < 3
+        await page.wait_for_timeout(300)
+        assert ui.nav.state == "idle"                                                  # the drag was not a click
+
+        # A click now: the robot is enabled and drives to where the click was.
+        where = await page.evaluate(on_page, [0.4, -0.1])
         await page.mouse.click(*where)
         await page.wait_for_function("document.getElementById('world-note').textContent.includes('arrived')",
                                      timeout=40000)
         at = robot.state()
         assert ((at["odom_x"] - 0.4) ** 2 + (at["odom_y"] + 0.1) ** 2) ** 0.5 < 0.12
+        await page.dblclick("#plan")                                                    # the whole map again
+        assert await page.evaluate("window.obotPlan.zoom") == 1
+
+        # "Map by itself": the robot looks around and goes on from there until told to stop.
+        await page.fill("#nav-radius", "1.5")
+        await page.click("#nav-explore")
+        await page.wait_for_function("document.getElementById('world-note').textContent.includes('mapping by itself')",
+                                     timeout=10000)
+        assert ui.nav.describe()["exploring"] and ui.nav._explore["radius"] == 1.5
+        await page.wait_for_timeout(1500)
+        assert abs(robot.state()["base_omega"]) > 0.2                                   # looking around
+        await page.click("#nav-stop")
+        await page.wait_for_function("!document.getElementById('world-note').textContent.includes('mapping by itself')")
+        assert not ui.nav.active
         shot = os.environ.get("OBOT_UI_SCREENSHOT_MAP")
         if shot:
             await page.wait_for_timeout(1500)

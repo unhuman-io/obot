@@ -233,6 +233,10 @@ class UiServer:
                         self.nav.goto(float(data["x"]), float(data["y"]))
                     elif data.get("action") == "look":
                         self.nav.look_around()
+                    elif data.get("action") == "explore":
+                        radius = data.get("radius", 4.0)
+                        if self._number(radius) and 0.5 <= radius <= 20:
+                            self.nav.explore(float(radius))
                     elif data.get("action") == "cancel":
                         self.nav.cancel("stopped")
         finally:

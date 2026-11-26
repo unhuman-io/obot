@@ -53,8 +53,11 @@
   #model.world { height: 460px; }
   h2 .tools { float: right; text-transform: none; letter-spacing: 0; }
   h2 .tools button { padding: 1px 8px; font-size: 12px; margin-left: 4px; }
+  h2 .tools label { font-size: 12px; font-weight: 400; margin-left: 2px; }
+  h2 .tools input { font: inherit; padding: 0 2px; }
   #world-note { margin: 6px 0 0; font-size: 12px; }
   #plan { display: block; width: 100%; height: 360px; border-radius: 6px; background: var(--bg); }
+  #plan { touch-action: none; cursor: grab; }
   #plan.armed { cursor: crosshair; }
   .simcam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
   .simcam canvas { display: block; width: 100%; height: 100%; }
@@ -112,6 +115,8 @@
         <button id="world-clear" title="Forget what was seen and start the map again">Clear map</button>
         <button id="nav-goto" title="Then click a place on the floor in the view below: the robot drives there by itself, around what is in the map, and stops for what its camera sees in the way. Touching the controller, or Stop, ends it.">Drive to a click</button>
         <button id="nav-look" title="Turn once on the spot, so that the camera has seen all around">Look around</button>
+        <button id="nav-explore" title="Map by itself: the robot looks around, drives to the nearest edge of what it has seen, looks around there, and so on, until there is no edge left that it can reach. It stays within the distance given of where it starts. Touching the controller, or Stop, ends it.">Map by itself</button>
+        <label class="muted" title="How far from where it starts the robot may go while mapping by itself">within <input id="nav-radius" type="number" min="1" max="15" step="0.5" value="4" style="width:3.6em"> m</label>
         <button id="nav-stop" title="Stop driving to the point">Stop</button>
       </span></h2>
     <div id="model"></div>
@@ -119,7 +124,7 @@
   </section>
   <section id="plan-section" style="display:none">
     <h2>Map from above</h2>
-    <canvas id="plan" title="Dark: something stands there. Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. With Drive to a click on, a click here sets where to go."></canvas>
+    <canvas id="plan" title="Dark: something stands there. Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. Wheel or two fingers: zoom. Drag: move. Double click: the whole map. With Drive to a click on, a click here sets where to go."></canvas>
   </section>
   <section>
     <h2>Plots</h2>
@@ -320,13 +325,16 @@ let navArmed = false, navLast = null;
 function showNav(nav) {
   navLast = nav;
   if (window.obotModel && window.obotModel.setNav) window.obotModel.setNav(nav);
-  $("nav-stop").disabled = !nav || !["planning", "driving", "looking"].includes(nav.state);
+  $("nav-stop").disabled = !nav || !(nav.exploring || ["planning", "driving", "looking"].includes(nav.state));
+  $("nav-explore").classList.toggle("active", !!(nav && nav.exploring));
 }
 function navNote() {
   if (navArmed) return "click a place on the floor to drive there";
   if (!navLast || navLast.state === "idle") return navLast && navLast.note ? navLast.note : "";
   const what = { planning: "finding a way", driving: "driving there", looking: "looking around", arrived: "arrived",
                  failed: "did not get there" }[navLast.state] || navLast.state;
+  if (navLast.exploring) return "mapping by itself: " + (navLast.note.replace(/^mapping: /, "") || what);
+  if (navLast.state === "arrived" && navLast.note) return navLast.note;
   return what + (navLast.note ? ": " + navLast.note : "");
 }
 function armNav(on) {
@@ -342,7 +350,9 @@ $("nav-goto").addEventListener("click", () => armNav(!navArmed));
 // --- the map from above --------------------------------------------------------------------
 // Fetched once a second (see WorldView.grid for the layout); the robot, its way and where it
 // is going are drawn over it with every state.
-const plan = { grid: null, picture: document.createElement("canvas"), pose: null, view: null, busy: false };
+// zoom: 1 shows the whole map; centre: the map square in the middle of the view (null: the map's middle)
+const plan = { grid: null, picture: document.createElement("canvas"), pose: null, view: null, busy: false,
+               zoom: 1, centre: null };
 window.obotPlan = plan;
 async function pollPlan() {
   if (plan.busy || document.hidden) return;
@@ -384,11 +394,14 @@ function drawPlan() {
   canvas.width = canvas.clientWidth * ratio;
   canvas.height = canvas.clientHeight * ratio;
   const context = canvas.getContext("2d");
-  const scale = Math.min(canvas.width / grid.width, canvas.height / grid.height);
-  const left = (canvas.width - grid.width * scale) / 2, top = (canvas.height - grid.height * scale) / 2;
+  const scale = Math.min(canvas.width / grid.width, canvas.height / grid.height) * plan.zoom;
+  // (the centre is in squares counted from the map's origin, so it stays put when the map grows)
+  const centre = plan.centre || [grid.i0 + grid.width / 2, grid.j0 + grid.height / 2];
+  const left = canvas.width / 2 - (centre[0] - grid.i0) * scale;
+  const top = canvas.height / 2 - (grid.height - (centre[1] - grid.j0)) * scale;
   // metres on the map <-> pixels of the canvas
   const px = (x, y) => [left + (x / grid.cell - grid.i0) * scale, top + (grid.height - (y / grid.cell - grid.j0)) * scale];
-  plan.view = { scale, left, top, ratio };
+  plan.view = { scale, left, top, ratio, centre };
   context.imageSmoothingEnabled = false;
   context.drawImage(plan.picture, left, top, grid.width * scale, grid.height * scale);
   const style = getComputedStyle(document.documentElement);
@@ -418,17 +431,69 @@ function drawPlan() {
     context.fill();
   }
 }
-$("plan").addEventListener("click", (e) => {
-  if (!navArmed || !plan.grid || !plan.view) return;
+// Zoom with the wheel (or two fingers) about where the pointer is, drag to move, double click
+// for the whole map again. A click without dragging, with "Drive to a click" on, sets the goal.
+function planSquare(clientX, clientY) {      // which map square (not whole) a place on the page is
   const box = $("plan").getBoundingClientRect(), { scale, left, top, ratio } = plan.view, grid = plan.grid;
-  const u = (e.clientX - box.left) * ratio, v = (e.clientY - box.top) * ratio;
-  send({ type: "nav", action: "goto", x: ((u - left) / scale + grid.i0) * grid.cell,
-         y: (grid.height - (v - top) / scale + grid.j0) * grid.cell });
-  armNav(false);
+  return [((clientX - box.left) * ratio - left) / scale + grid.i0,
+          grid.height - ((clientY - box.top) * ratio - top) / scale + grid.j0];
+}
+function planZoom(factor, clientX, clientY) {
+  if (!plan.grid || !plan.view) return;
+  const under = planSquare(clientX, clientY), before = plan.zoom;
+  plan.zoom = Math.max(1, Math.min(40, plan.zoom * factor));
+  const k = before / plan.zoom, c = plan.view.centre;        // what was under the pointer stays there
+  plan.centre = plan.zoom === 1 ? null : [under[0] + (c[0] - under[0]) * k, under[1] + (c[1] - under[1]) * k];
+  drawPlan();
+}
+const planTouch = new Map();
+let planDrag = null;
+$("plan").addEventListener("wheel", (e) => {
+  e.preventDefault();
+  planZoom(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+}, { passive: false });
+$("plan").addEventListener("pointerdown", (e) => {
+  $("plan").setPointerCapture(e.pointerId);
+  planTouch.set(e.pointerId, [e.clientX, e.clientY]);
+  planDrag = { from: [e.clientX, e.clientY], moved: 0 };
 });
+$("plan").addEventListener("pointermove", (e) => {
+  const last = planTouch.get(e.pointerId);
+  if (!last || !plan.view) return;
+  if (planTouch.size === 2) {                                // two fingers: their distance is the zoom
+    const [other] = [...planTouch].filter(([id]) => id !== e.pointerId).map(([, p]) => p);
+    const was = Math.hypot(last[0] - other[0], last[1] - other[1]);
+    const now = Math.hypot(e.clientX - other[0], e.clientY - other[1]);
+    if (was > 1) planZoom(now / was, (e.clientX + other[0]) / 2, (e.clientY + other[1]) / 2);
+  } else if (planDrag) {
+    planDrag.moved += Math.hypot(e.clientX - last[0], e.clientY - last[1]);
+    if (planDrag.moved > 4 && plan.zoom > 1) {
+      const per = plan.view.ratio / plan.view.scale, c = plan.view.centre;
+      plan.centre = [c[0] - (e.clientX - last[0]) * per, c[1] + (e.clientY - last[1]) * per];
+      drawPlan();
+    }
+  }
+  planTouch.set(e.pointerId, [e.clientX, e.clientY]);
+});
+const planRelease = (e) => {
+  const click = planTouch.size === 1 && planDrag && planDrag.moved <= 4 && e.type === "pointerup";
+  planTouch.delete(e.pointerId);
+  planDrag = null;
+  if (!click || !navArmed || !plan.grid || !plan.view) return;
+  const [i, j] = planSquare(e.clientX, e.clientY);
+  send({ type: "nav", action: "goto", x: i * plan.grid.cell, y: j * plan.grid.cell });
+  armNav(false);
+};
+$("plan").addEventListener("pointerup", planRelease);
+$("plan").addEventListener("pointercancel", planRelease);
+$("plan").addEventListener("dblclick", () => { plan.zoom = 1; plan.centre = null; drawPlan(); });
 setInterval(pollPlan, 1000);
 new ResizeObserver(drawPlan).observe($("plan"));
 $("nav-look").addEventListener("click", () => send({ type: "nav", action: "look" }));
+$("nav-explore").addEventListener("click", () => {
+  armNav(false);
+  send({ type: "nav", action: "explore", radius: Math.max(1, Math.min(15, parseFloat($("nav-radius").value) || 4)) });
+});
 $("nav-stop").addEventListener("click", () => { armNav(false); send({ type: "nav", action: "cancel" }); });
 
 $("world-clear").addEventListener("click", () => send({ type: "world", action: "clear" }));

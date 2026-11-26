@@ -192,6 +192,51 @@ def test_a_point_inside_something_and_a_point_out_of_reach(room, monkeypatch):
     assert nearest_box(np.array(sim.went)) > 0.25
 
 
+TWO_ROOMS = tuple(((x, y, 0.75), (dx, dy, 1.5), (216, 212, 204)) for x, y, dx, dy in (
+    (2.0, 2.05, 6.2, 0.1), (2.0, -2.05, 6.2, 0.1), (-1.05, 0.0, 0.1, 4.2), (5.05, 0.0, 0.1, 4.2),   # 6 m by 4 m
+    (2.0, -1.15, 0.1, 1.7), (2.0, 1.45, 0.1, 1.1),             # a wall across, with a door 1.2 m wide
+)) + (((0.8, -1.2, 0.2), (0.4, 0.4, 0.4), (138, 111, 82)),     # a box in the first room
+      ((3.9, 1.0, 0.2), (0.4, 0.4, 0.4), (63, 127, 191)))      # and one in the second
+
+
+def test_maps_two_rooms_by_itself(monkeypatch):
+    from obot.ui import native as native_map
+
+    monkeypatch.setattr(scene, "BOXES", TWO_ROOMS)
+    sim = Sim(native=native_map.find() is not None)
+    sim.nav.explore(radius=8.0)
+    assert sim.nav.describe()["exploring"]
+    went = sim.run(seconds=1500)
+    described = sim.nav.describe()
+    assert described["state"] == "arrived" and described["note"] == "mapped all it can reach", described
+    assert not described["exploring"] and not sim.nav.active
+    travelled = float(np.hypot(*np.diff(went[:, :2], axis=0).T).sum())
+    # How much of each room's floor has been seen? (Not all: the camera does not see the
+    # floor right behind a box, and nothing sends the robot there.)
+    cell = 0.06
+    first = sim.view.known((int(-0.9 / cell), int(-1.9 / cell)), (int(3.8 / cell), int(2.8 / cell)))
+    second = sim.view.known((int(2.2 / cell), int(-1.9 / cell)), (int(3.8 / cell), int(2.7 / cell)))
+    print(f"mapped two rooms in {len(went) * 0.02:.0f} s, {travelled:.1f} m: {first.mean() * 100:.0f} % and "
+          f"{second.mean() * 100:.0f} % of their floors seen, never nearer than {nearest_box(went):.2f} m to anything")
+    assert first.mean() > 0.85 and second.mean() > 0.85
+    assert went[:, 0].max() > 2.5                                         # it went through the door
+    assert nearest_box(went) > 0.25 and forwards_only(went)
+    sim.view.close()
+    # Told to stay within a metre and a half of where it starts, it does: the second room
+    # stays as the door showed it.
+    near = Sim(native=native_map.find() is not None)
+    near.nav.explore(radius=1.5)
+    went = near.run(seconds=900)
+    assert near.nav.state == "arrived" and np.hypot(went[:, 0], went[:, 1]).max() < 1.6
+    # Someone takes over: that is the end of it.
+    near.nav.explore()
+    near.run(seconds=3)
+    assert near.nav.active
+    near.nav.cancel("stopped: someone took the controls")
+    assert not near.nav.active and near.nav.step(0.02)[0] == 0.0
+    near.view.close()
+
+
 def test_stops_for_what_was_not_there_before(room, monkeypatch):
     sim = Sim()
     sim.nav.look_around()

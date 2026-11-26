@@ -297,6 +297,18 @@ on the floor (dark), the floor seen to be free (light), the margin around things
 the middle of the base cannot be (shaded), and the robot's footprint to scale. **Look around** turns it once on the spot, so that the camera has seen all there is
 to see from where it stands. **Stop**, or touching a controller, ends it at once.
 
+**Map by itself** sends the robot off to map its surroundings without being told where
+to go: it looks around, drives to the nearest edge of what it has seen, looks around
+there, and so on, until there is no such edge left that it can reach. It stays within the
+distance given next to the button (4 m) of where it started, and stops by itself after a
+quarter of an hour at the latest. Set the distance so that an open door, the garage door
+or the top of a staircase is outside it: the robot does not know that it should not go
+there. Edges that are not worth a visit are left out: the unseen inside a thing or right
+behind one.
+
+On the map from above, the wheel (or two fingers) zooms about where the pointer is, a drag
+moves the map, and a double click shows all of it again.
+
 How it decides:
 
 - It only drives where it has *seen the floor to be free*, and keeps the middle of the
