@@ -87,6 +87,7 @@ def test_the_same_map_from_the_same_pictures(room, tmp_path):
     for x, y, yaw, turning in path:
         show(config, views, (x, y, yaw), turning)
         assert native.ahead[0] == pytest.approx(python.ahead[0], abs=1e-3) or native.ahead[0] == python.ahead[0]
+        assert python.step() == 0 and native.step() == 0                 # a picture is used once
     try:
         # The voxels shown: the same ones (a reading that falls on the border between two
         # cells may go either way, the two computing in slightly different order), in the same colours.

@@ -271,7 +271,7 @@ def test_level_to_floor_recovers_the_mount():
         assert result["rpy"] == pytest.approx([0.0, 0.5, 0.0], abs=0.01)
         # The colour camera moved with it, and the map now puts the floor at z = 0.
         assert np.allclose(view.mounts["room"], view.mounts["room depth"])
-        assert view.step() == 1 and view.step() == 0
+        assert view.step() == 1
         time.sleep(0.2)
         view.step()
         centres, _ = view.map.points()
