@@ -396,6 +396,7 @@ class Navigator:
         self._looked_at = -math.inf
         self._look_way, self._swept = 1.0, (0.0, 0.0)
         self.plan_ms = 0.0  # how long the last plan took to make
+        self._turn_way = 0.0  # turning on the spot the long way round (+1 left, -1 right), or 0
         self._tight_since: float | None = None
         self._serial = 0  # goto() and cancel() make plans that are under way out of date
         self._looked = False  # has looked around from about here for this goal
@@ -422,6 +423,7 @@ class Navigator:
         self.goal, self.path, self.state, self.note = (float(x), float(y)), [], "planning", ""
         self._blocked_since = None
         self._tight_since = None
+        self._turn_way = 0.0
         self._looked = False
         self._legs = 0
         self._plan()
@@ -669,7 +671,16 @@ class Navigator:
         off = world.wrap_angle(math.atan2(ty - y, tx - x) - yaw)
         w = max(-W_MAX, min(W_MAX, 2.0 * off))
         if abs(off) > 0.45:
-            return self._fits(x, y, yaw, 0.0, w, now)  # turn on the spot first
+            # Turn on the spot first: the short way round, or, if the tail would hit
+            # something that way, the long way (and then all the way: no turning back).
+            if self._turn_way:
+                w = self._turn_way * 0.8 * W_MAX
+            if not self._room(x, y, yaw, 0.0, w) and not self._turn_way:
+                other = -math.copysign(0.8 * W_MAX, w)
+                if self._room(x, y, yaw, 0.0, other):
+                    self._turn_way, w = math.copysign(1.0, other), other
+            return self._fits(x, y, yaw, 0.0, w, now)
+        self._turn_way = 0.0
         v = V_MAX * (1 - abs(off) / 0.45) * min(1.0, 0.3 + math.hypot(gx - x, gy - y) / 0.5)
         # What the camera sees ahead has the last word.
         ahead, seen = self.view.ahead
@@ -698,6 +709,24 @@ class Navigator:
             v *= min(1.0, max(0.25, (gap - STOP_GAP) / (SLOW_GAP - STOP_GAP)))
         return self._fits(x, y, yaw, v, w, now)
 
+    def _room(self, x: float, y: float, yaw: float, v: float, w: float) -> bool:
+        """Does the base's whole outline stay clear of what is in the map during the next
+        half second of this move? (What is inside the outline already does not count: a
+        map is never quite clean.)"""
+        costmap = self._costmap
+        if costmap is None:
+            return True
+        c, s = math.cos(yaw), math.sin(yaw)
+        most = costmap.touching(OUTLINE @ np.array([[c, s], [-s, c]]) + (x, y))
+        for t in (0.1, 0.2, 0.3, 0.4, 0.5):
+            a = yaw + w * t
+            c, s = math.cos(yaw + w * t / 2), math.sin(yaw + w * t / 2)
+            px, py = x + v * t * c, y + v * t * s
+            ca, sa = math.cos(a), math.sin(a)
+            if costmap.touching(OUTLINE @ np.array([[ca, sa], [-sa, ca]]) + (px, py)) > most:
+                return False
+        return True
+
     def _fits(self, x: float, y: float, yaw: float, v: float, w: float, now: float) -> tuple[float, float]:
         """The move, if the base's whole outline stays clear of what is in the map during
         the next half second of it; if not, the part of it that does (straight on without
@@ -711,25 +740,10 @@ class Navigator:
             return v, w
         if v > 0:  # slower where it is tight
             v *= max(0.4, min(1.0, (costmap.clear_at(x, y) - RADIUS + 0.04) / 0.14))
-
-        def worst(mv: float, mw: float) -> int:
-            most = 0
-            for t in (0.1, 0.2, 0.3, 0.4, 0.5):
-                a = yaw + mw * t
-                c, s = math.cos(yaw + mw * t / 2), math.sin(yaw + mw * t / 2)
-                px, py = x + mv * t * c, y + mv * t * s
-                ca, sa = math.cos(a), math.sin(a)
-                placed = OUTLINE @ np.array([[ca, sa], [-sa, ca]]) + (px, py)
-                most = max(most, costmap.touching(placed))
-            return most
-
-        c, s = math.cos(yaw), math.sin(yaw)
-        # (a map is never quite clean: what is inside the outline already does not count)
-        now_touching = costmap.touching(OUTLINE @ np.array([[c, s], [-s, c]]) + (x, y))
         # (turning alone only counts as a way on if it is a turn worth the name)
         moves = ((v, w), (v, 0.0)) + (((0.0, w),) if abs(w) > 0.1 else ()) if v > 0 else ((0.0, w),)
         for move in moves:
-            if move != (0.0, 0.0) and worst(*move) <= now_touching:
+            if move != (0.0, 0.0) and self._room(x, y, yaw, *move):
                 self._tight_since = None
                 return move
         if self.state == "looking":

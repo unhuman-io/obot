@@ -220,6 +220,25 @@ def test_does_not_turn_where_its_tail_would_hit(monkeypatch):
     assert body_gap(np.array(sim.went)) > 0.005 and went[-1, 0] > 0.5
 
 
+def test_turns_the_long_way_round_when_the_tail_would_hit_the_short_way(monkeypatch):
+    # Something small stands behind the base to its left, where its tail would swing
+    # through if it turned right. The goal is to the right. It turns left, three quarters
+    # of a turn, and goes.
+    monkeypatch.setattr(scene, "BOXES", (((-0.233, 0.233, 0.2), (0.08, 0.08, 0.4), (90, 90, 90)),))
+    sim = Sim()
+    post = np.array([(x, y, z) for x in (-0.26, -0.23, -0.2) for y in (0.2, 0.23, 0.26)
+                     for z in (0.09, 0.15, 0.21)])
+    for _ in range(5):                                                   # (it cannot see behind itself)
+        sim.view.map.integrate(post)
+    sim.view._seen[:] = True
+    went = sim.go(0.0, -1.5, seconds=120)
+    assert sim.nav.state == "arrived", sim.nav.describe()
+    print(f"turned {math.degrees(went[:, 2].max()):.0f} degrees left to face right; "
+          f"least room {body_gap(went) * 100:.1f} cm")
+    assert went[:, 2].max() > 4.0 and went[:, 2].min() > -0.3            # never right
+    assert body_gap(went) > 0.01
+
+
 def test_drives_around_things_and_finds_its_way_as_it_sees_more(room, native):
     sim = Sim(native=native)
     # Behind the box, where the base has not looked, with the shirt and the sock straight
