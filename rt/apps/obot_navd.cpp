@@ -15,6 +15,7 @@
 // See python/src/obot/ui/native.py for the other end and the layout of each request.
 #include <cerrno>
 #include <cmath>
+#include <csignal>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -269,6 +270,11 @@ int main(int argc, char**) {
         std::fprintf(stderr, "obot-navd: started by the operator page's server (obot ui); it takes no arguments\n");
         return 2;
     }
+    // It ends when the page server closes its input, and not before: a service being stopped
+    // (and Ctrl-C in a terminal) signals every process of it at once, and the page server
+    // still has the map to save, which is here.
+    std::signal(SIGTERM, SIG_IGN);
+    std::signal(SIGINT, SIG_IGN);
     Maps m;
     std::vector<uint8_t> request, answer;
     for (;;) {

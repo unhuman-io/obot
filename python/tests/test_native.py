@@ -183,3 +183,21 @@ def test_obot_navd_is_much_faster(room):
         assert struct.unpack_from("<I", native.grid())[0] == 0x3147424F
     finally:
         native.close()
+
+
+def test_obot_navd_stays_for_the_map_to_be_saved_when_everything_is_told_to_stop(tmp_path):
+    # Stopping the service signals the page server and obot-navd at once; the page server
+    # then saves the map, which obot-navd has.
+    import signal
+
+    navd = native_map.Navd(native_map.find(), 0.03, 1000, 0.06, 250, 0.245, 0.05, 0.7)
+    try:
+        navd._process.send_signal(signal.SIGTERM)
+        navd._process.send_signal(signal.SIGINT)
+        time.sleep(0.2)
+        assert navd._process.poll() is None
+        navd.save(str(tmp_path / "map"), "a frame")
+        assert (tmp_path / "map").stat().st_size > 0
+    finally:
+        navd.close()
+    assert navd._process.poll() == 0   # and it ends when its input does

@@ -461,3 +461,63 @@ async def test_page_server_drives_to_a_clicked_point_and_keeps_the_map(robot, da
         pushed._take_up_map({"t_real_ns": int(robot.state()["t_real_ns"]) + 300_000_000_000, "cycle": 5, "q": turned,
                              "odom_x": 0.0, "odom_y": 0.0, "odom_yaw": 0.0})
         assert len(pushed.world.map) == 0 and "new map" in pushed.world.note
+
+
+def test_laying_one_map_over_another_finds_the_turn_and_the_move():
+    from obot.ui import maptest
+
+    rng = np.random.default_rng(1)
+    walls = np.concatenate([wall(-2, 2, 2, 2, 0.01), wall(-2, -1.5, 2.5, -1.5, 0.01), wall(-2, -1.5, -2, 2, 0.01),
+                            wall(2.5, -1.5, 2.5, 1, 0.01), wall(1, 0.8, 1.3, 0.8, 0.01)])
+
+    def squares(points):
+        return np.unique(np.floor((points + rng.normal(0, 0.015, points.shape)) / 0.03), axis=0) * 0.03
+
+    centre = np.array((0.2, 0.1))
+    for degrees, move in ((0.0, (0.0, 0.0)), (0.35, (0.0, 0.0)), (-7.6, (0.06, -0.03)), (11.5, (0.1, 0.2))):
+        c, s = math.cos(math.radians(-degrees)), math.sin(math.radians(-degrees))
+        other = ((walls - centre) - move) @ np.array([[c, s], [-s, c]]) + centre   # moved back, then turned back
+        found = maptest.fit(squares(walls), squares(other), centre, 0.03, most_shift=0.36)
+        assert math.degrees(found["turn"]) == pytest.approx(degrees, abs=0.15), (degrees, move, found)
+        assert found["move"] == pytest.approx(move, abs=0.015) and found["overlap"] > 0.95
+    with pytest.raises(maptest.Failed, match="too little in the map"):
+        maptest.fit(squares(walls)[:50], squares(walls), centre, 0.03)
+
+
+async def test_map_test_measures_what_is_wrong_with_the_map(robot, daemon, room, tmp_path, monkeypatch):
+    """`obot map-test` with obot-rtd on simulated motors and a simulated camera: with
+    everything as it should be it passes; told that the pictures are 60 ms older than they
+    are, it says that they are 60 ms newer than they are taken for, and fails."""
+    aiohttp_utils = pytest.importorskip("aiohttp.test_utils")
+    from test_ui import make_server
+
+    from obot.ui import maptest
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    ui = make_server(daemon)
+    ui.config.cameras.append(CameraConfig(name="low depth", source="scene:depth", width=320, height=240, fps=15,
+                                          xyz=(0.116, 0.0175, 0.143), rpy=(0.0, 0.0, 0.0)))
+    ui.config.world.stride = 2
+    said = []
+    async with aiohttp_utils.TestServer(ui.app()) as server:
+        url = str(server.make_url("")).rstrip("/")
+        # (a simulated camera's time is not a kernel's: that check is not for here)
+        monkeypatch.setattr(type(ui.cameras["low depth"]), "stamps_capture", True, raising=False)
+        result = await maptest.run(url, turns=1, drive=True, out=str(tmp_path / "report"), say=said.append)
+        report = maptest.run.report
+        print("\n".join(said))
+        assert result == 0, said
+        # (The simulated camera draws what the last state it read shows and stamps that with
+        # the time afterwards: its pictures are some 10 ms old, and the test finds that too.)
+        assert abs(report["scale_pct"]) < 0.15 and abs(report["delay_ms"]) < 18
+        as_it_is = report["delay_ms"]
+        assert math.hypot(*report["d_on_b"]["move"]) < 0.06 and report["driven_m"] > 1.0
+        assert (tmp_path / "report" / "report.json").exists() and robot.state()["mode"] == 1   # idle again
+
+        ui.world.depth[0].latency = 0.06
+        said.clear()
+        result = await maptest.run(url, turns=1, drive=False, say=said.append)
+        report = maptest.run.report
+        print("\n".join(said))
+        assert result == 1 and "MAP TEST FAILED: the pictures are from when they are taken to be" in said[-1]
+        assert report["delay_ms"] - as_it_is == pytest.approx(-60, abs=12) and abs(report["scale_pct"]) < 0.15

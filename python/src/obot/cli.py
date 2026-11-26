@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -155,6 +156,24 @@ def cmd_viz(args) -> int:
         return run(robot, save=args.save, connect=args.connect, urdf=args.urdf, duration=args.duration)
 
 
+def cmd_map_test(args) -> int:
+    import asyncio
+
+    from .ui import maptest
+
+    if not args.yes:
+        print(f"The robot will forget its map, turn on the spot {args.turns + 3} times"
+              + ("" if args.no_drive else ", drive about a metre and back, and turn once more")
+              + ",\nby itself. It needs room to turn. Have a controller or the page at hand to stop it. Go on? [y/N] ",
+              end="", flush=True)
+        if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+            return 2
+    limits = {name: getattr(args, name) for name in maptest.LIMITS if getattr(args, name) is not None}
+    out = args.out or os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "obot",
+                                   "map-test-" + time.strftime("%Y%m%d-%H%M%S"))
+    return asyncio.run(maptest.run(args.url, args.turns, not args.no_drive, out, limits))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="obot", description=__doc__.split("\n")[0])
     parser.add_argument("--config", help="robot configuration (default: $OBOT_CONFIG or /etc/obot/robot.toml)")
@@ -195,6 +214,27 @@ def main(argv: list[str] | None = None) -> int:
     viz.add_argument("--urdf", help="robot model to show (logged once)")
     viz.add_argument("--duration", type=float, help="seconds (default: until interrupted)")
     viz.set_defaults(func=cmd_viz)
+
+    from .ui.maptest import LIMITS
+
+    map_test = sub.add_parser(
+        "map-test", help="system test on the real robot: it turns and drives by itself, and its maps are compared",
+        description="Needs the operator page's server running (obot ui) and room for the robot to turn. The robot "
+                    "forgets its map, makes maps of its surroundings turning left and right, drives about a metre "
+                    "and back, and the maps are laid over each other: that gives how far off the odometry's turning "
+                    "is, how far off the time of the pictures, and what driving adds. "
+                    "Exit status 0: passed, 1: failed, 2: could not be made.")
+    map_test.add_argument("--url", default="http://127.0.0.1:8080", help="the page server (default: this machine's)")
+    map_test.add_argument("--turns", type=int, default=3, choices=range(1, 10), metavar="N",
+                          help="turns between the two maps that give the odometry's error (default 3)")
+    map_test.add_argument("--no-drive", action="store_true", help="only turn on the spot, do not drive anywhere")
+    map_test.add_argument("--out", help="directory for the report and a picture of the maps "
+                                        "(default: ~/.local/state/obot/map-test-<time>)")
+    map_test.add_argument("--yes", action="store_true", help="do not ask before moving the robot")
+    for name, (value, text) in LIMITS.items():
+        map_test.add_argument("--" + name.replace("_", "-"), type=float, dest=name, metavar="LIMIT",
+                              help=f"{text} (default {value:g})")
+    map_test.set_defaults(func=cmd_map_test)
 
     args = parser.parse_args(argv)
     try:

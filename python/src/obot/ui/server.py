@@ -237,7 +237,11 @@ class UiServer:
                     if data.get("action") == "goto" and self._number(data.get("x")) and self._number(data.get("y")):
                         self.nav.goto(float(data["x"]), float(data["y"]))
                     elif data.get("action") == "look":
-                        self.nav.look_around()
+                        turns = data.get("turns")
+                        if turns is None:
+                            self.nav.look_around()
+                        elif self._number(turns) and 0.1 <= abs(turns) <= 10:
+                            self.nav.look_around(float(turns))
                     elif data.get("action") == "explore":
                         radius = data.get("radius", 4.0)
                         if self._number(radius) and 0.5 <= radius <= 20:
@@ -612,7 +616,7 @@ class UiServer:
 
             if tick % (TICK_HZ // STATE_HZ) == 0 and state is not None:
                 cameras = {name: {"age": None if c.age == float("inf") else round(c.age, 2), "error": c.error,
-                                  "fps": round(c.fps, 1)}
+                                  "fps": round(c.fps, 1), "capture_time": c.stamps_capture}
                            for name, c in self.cameras.items()}
                 await self._broadcast({"type": "state", "status": self.status, "cameras": cameras,
                                        "nav": self.nav.describe() if self.nav else None,

@@ -30,10 +30,10 @@ from . import native as native_map
 # (clearly better than 35 or 65 ms).
 DEFAULT_LATENCY_S = 0.05
 # A camera that says when each picture was taken (the kernel's stamp, "start of exposure")
-# is still not quite believed: turning on the spot six times, the D435's depth pictures line
-# up best with the wheels 30 to 40 ms before that stamp (10 600 cells of map, against 12 700
-# with the stamp as it is).
-CAPTURE_DELAY_S = 0.035
+# is still not quite believed: the D435's depth pictures are older than that stamp. By 23 ms
+# with the stamp taken as it is and by 29 ms with 35 ms taken off it, says `obot map-test`
+# (a map made turning left laid over one made turning right).
+CAPTURE_DELAY_S = 0.027
 
 
 class WorldView:

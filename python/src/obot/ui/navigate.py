@@ -395,6 +395,7 @@ class Navigator:
         self._costmap: Costmap | None = None  # the map as the last plan was made on
         self._looked_at = -math.inf
         self._look_way, self._swept = 1.0, (0.0, 0.0)
+        self._look_far: float | None = None  # rad to turn when looking around by whole turns
         self.plan_ms = 0.0  # how long the last plan took to make
         self._turn_way = 0.0  # turning on the spot the long way round (+1 left, -1 right), or 0
         self._tight_since: float | None = None
@@ -428,10 +429,17 @@ class Navigator:
         self._legs = 0
         self._plan()
 
-    def look_around(self) -> None:
-        """Turn once on the spot, so that the camera has seen all there is to see from here."""
+    def look_around(self, turns: float | None = None) -> None:
+        """Turn on the spot until the camera has seen all there is to see from here: to the
+        left as far as there is room for the tail, and the rest to the right if need be.
+
+        With `turns`, that many whole turns instead, to the left or (negative) to the right,
+        or not at all if there is no room: for measuring, where it matters that what is
+        compared was seen turning the same way and the same amount."""
         self._explore = None
         self._look("looking around")
+        if turns is not None:
+            self._look_way, self._look_far = math.copysign(1.0, turns), abs(turns) * 2 * math.pi
 
     def _around(self) -> None:
         """The map close around the base, for checking that it has room to turn."""
@@ -449,7 +457,7 @@ class Navigator:
 
     def _look(self, note: str) -> None:
         self._looked_at = -math.inf
-        self._look_way, self._swept = 1.0, (0.0, 0.0)
+        self._look_way, self._swept, self._look_far = 1.0, (0.0, 0.0), None
         self._serial += 1
         self.goal, self.path = None, []
         self._looked, self._turned, self._last_yaw = True, 0.0, None
@@ -563,7 +571,7 @@ class Navigator:
             elif not self._looked:
                 # Perhaps the way has just not been seen yet: look all around once, then try again.
                 self._looked, self._turned, self._last_yaw = True, 0.0, None
-                self._look_way, self._swept, self._looked_at = 1.0, (0.0, 0.0), -math.inf
+                self._look_way, self._swept, self._looked_at, self._look_far = 1.0, (0.0, 0.0), -math.inf, None
                 self.state, self.note, self.path = "looking", "looking around", []
             else:
                 gi, gj = costmap.index(goal)
@@ -630,7 +638,11 @@ class Navigator:
                 self._turned += world.wrap_angle(yaw - self._last_yaw)   # (signed: where it faces now)
                 self._swept = (min(self._swept[0], self._turned), max(self._swept[1], self._turned))
             self._last_yaw = yaw
-            if self._swept[1] - self._swept[0] < 2 * math.pi - self.SEES:
+            if self._look_far is not None:
+                more = abs(self._turned) < self._look_far
+            else:
+                more = self._swept[1] - self._swept[0] < 2 * math.pi - self.SEES
+            if more:
                 now = self.clock()
                 if now - self._looked_at > 1.5 and not self._planning:
                     self._looked_at = now   # what is around, as the map has it now
@@ -640,6 +652,9 @@ class Navigator:
                 if w != 0.0 or self._costmap is None:
                     return 0.0, w if w != 0.0 else self._look_way * self.W_LOOK
                 self._tight_since = None
+                if self._look_far is not None:
+                    self.state, self.note = "failed", "no room to turn here"
+                    return 0.0, 0.0
                 if self._look_way > 0:
                     self._look_way = -1.0   # no room to turn further this way: the other way
                     return 0.0, 0.0

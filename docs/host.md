@@ -167,6 +167,7 @@ obot teleop                 # only a controller on the robot, no web page
 obot status | watch | enable | disable | clear | stop
 obot record run.mcap        # every state record; opens in Foxglove, PlotJuggler, Rerun
 obot viz                    # live plots of every joint and the control loop in the Rerun viewer
+obot map-test               # on the robot: it turns and drives by itself, and its map is checked
 ```
 
 Controller layout (Xbox or any controller the browser reports with the standard mapping):
@@ -391,7 +392,48 @@ Two things from those recordings that matter either way:
 - `track_width` and `wheel_radius` under `[base]` decide how good the odometry is. Turn
   the robot on the spot: if walls come apart in the map as it turns, `track_width` is off.
 - A depth picture reaches the page server about 50 ms after it was taken (Jetson Nano,
-  D435 over V4L2); `latency` on a camera overrides that.
+  D435 over V4L2), and not always by the same. Where the kernel says when a picture was
+  taken (depth over V4L2), that time is used; the picture is still some 27 ms older than
+  that. `latency` on a camera overrides either.
+
+### Testing the map on the robot: `obot map-test`
+
+A test to start by hand, on the robot, with the page server running and the robot standing
+where it has room to turn and things around it to see (walls, furniture):
+
+```
+obot map-test            # asks before it moves the robot; --yes does not
+obot map-test --help     # the limits, --no-drive, --turns, --out
+```
+
+A map is good if a thing is in the same place in it every time the robot looks. So the
+robot makes a map of what is around it four times, each from nothing and by turning once on
+the spot, and the maps are laid over each other: how far does one have to be turned and
+moved to lie on the other?
+
+| maps | what the robot did between | what it gives |
+|---|---|---|
+| B on A | three more turns to the left | The base turns more, or less, than the odometry says: `track_width`. The test prints the factor to put it right. |
+| C on B | C is made turning right, B turning left | The pictures are older, or newer, than they are taken for: everything is then drawn ahead of where it is, or behind. The camera's `latency`. |
+| D on B | a drive to a free place about a metre away, and back | What driving adds: how far the map has moved and turned. |
+
+It also checks that the depth camera delivers and says when its pictures were taken, that
+the robot got where it was sent, and how long a map update took. It takes about three
+minutes, leaves the robot disabled where it started, and the map it has then is only that
+of the last turn. The exit status is 0 (passed), 1 (failed) or 2 (could not be made: no
+room to turn, too little to see, a fault). A report and a picture of the four maps over
+each other go to `~/.local/state/obot/map-test-<time>/`.
+
+On r1 in a garage, as configured: the base turns 0.01 %, 0.09 % and 0.08 % more than the
+odometry says (three runs), the pictures are less than a millisecond off, and after the
+drive the map had moved 1 cm and turned 0.2 and 0.7 degrees. With the track width from the
+CAD model and the kernel's time taken as it is, which is how it was before this test:
+0.87 %, which is 12.6 degrees after four turns, and 23 ms. Both fail. The limits (0.3 %, 15 ms, 12 cm and 3 degrees after the drive)
+are from that one robot; the turn of one map against another is good to about 0.15
+degrees, which is 0.01 % over four turns and 3 ms.
+
+The same test runs in CI against the simulated robot (`test_navigate.py`), once as it is
+and once told that the pictures are 60 ms older than they are, which it has to find.
 
 ## Bringing up a real robot
 
