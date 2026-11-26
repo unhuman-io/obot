@@ -139,6 +139,7 @@ function addWorld(scene, query, frustums, fovDegrees) {
   }
   const cell = (ix, iy, iz) => (ix + 32768) * 4294967296 + (iy + 32768) * 65536 + (iz + 32768);
 
+  const TRAIL_HEIGHT = 0.06;                     // m
   const trail = [];
   const trailLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xe0a040 }));
   trailLine.frustumCulled = false;
@@ -220,7 +221,8 @@ function addWorld(scene, query, frustums, fovDegrees) {
         material.size = voxel * 1.3 / Math.tan(fovDegrees * Math.PI / 360);
       }
       if (trailNew || (flags & 1)) {
-        for (let i = 0; i < trailNew; i++) trail.push(path[i * 2], path[i * 2 + 1], 0.01);
+        // drawn a little above the floor: the map's floor cells would cover it otherwise
+        for (let i = 0; i < trailNew; i++) trail.push(path[i * 2], path[i * 2 + 1], TRAIL_HEIGHT);
         if (trail.length > 60000) trail.splice(0, trail.length - 60000);
         trailLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute(trail, 3));
       }
@@ -337,6 +339,29 @@ export async function show(container, query, simCameras = [], options = { model:
   for (const cam of simCameras) {
     if (links[cam.link] && cam.element) views.push(addSimCamera(scene, links[cam.link], cam));
   }
+  // A click on the floor (not a drag, which turns the view), for whoever asked for it.
+  let floorClick = null, pressed = null;
+  const ray = new THREE.Raycaster(), floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  renderer.domElement.addEventListener("pointerdown", (e) => { pressed = [e.clientX, e.clientY]; });
+  renderer.domElement.addEventListener("pointerup", (e) => {
+    const moved = pressed ? Math.hypot(e.clientX - pressed[0], e.clientY - pressed[1]) : 99;
+    pressed = null;
+    if (!floorClick || moved > 4) return;
+    const box = renderer.domElement.getBoundingClientRect();
+    ray.setFromCamera(new THREE.Vector2((e.clientX - box.left) / box.width * 2 - 1,
+                                        -((e.clientY - box.top) / box.height) * 2 + 1), camera);
+    const hit = ray.ray.intersectPlane(floor, new THREE.Vector3());
+    if (hit) floorClick(hit.x, hit.y);
+  });
+  // Where the robot is driving to by itself, and the way it means to take.
+  const goalMark = new THREE.Mesh(new THREE.RingGeometry(0.08, 0.12, 32),
+                                  new THREE.MeshBasicMaterial({ color: 0x2f9e44, side: THREE.DoubleSide }));
+  goalMark.position.z = 0.07;
+  goalMark.visible = false;
+  const wayLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x2f9e44 }));
+  wayLine.frustumCulled = false;
+  scene.add(goalMark, wayLine);
+
   let tick = 0;
   renderer.setAnimationLoop(() => {
     controls.update();
@@ -349,6 +374,20 @@ export async function show(container, query, simCameras = [], options = { model:
     views: views.length,
     joints: Object.keys(moving),
     world,
+    onFloorClick(callback) {
+      floorClick = callback;
+      renderer.domElement.style.cursor = callback ? "crosshair" : "";
+    },
+    setNav(nav) {
+      const going = nav && nav.goal && ["planning", "driving", "looking"].includes(nav.state);
+      goalMark.visible = !!going;
+      wayLine.visible = !!going;
+      if (!going) return;
+      goalMark.position.set(nav.goal[0], nav.goal[1], 0.07);
+      const way = [base.position.x, base.position.y, 0.07];
+      for (const [x, y] of nav.path) way.push(x, y, 0.07);
+      wayLine.geometry.setAttribute("position", new THREE.Float32BufferAttribute(way, 3));
+    },
     setJoints(names, q, odom) {
       names.forEach((name, i) => {
         const joint = moving[name];

@@ -261,7 +261,7 @@ color = "d435"                  # the camera whose picture colours the points
 voxel = 0.03
 range = 3.5
 max_voxels = 250000
-correct_odometry = true         # the cameras correct the wheel odometry, see below
+correct_odometry = false        # experimental: the cameras correct the wheel odometry, see below
 ```
 
 **Level to floor** on the page measures height and tilt of a base camera from the floor in
@@ -273,33 +273,54 @@ its picture and shows the `xyz` and `rpy` to put in the configuration. Things to
   server draws depth and colour pictures of a small made-up room (`scene:depth`,
   `scene:color`).
 
-### The cameras correct the odometry
+### Driving to a place on the map
 
-The wheels say how the base moved from one moment to the next, and that drifts: wheels
-slip, and the track width and wheel radius are never exactly right. A depth camera on the
-base (one without `link`) puts that right. From each picture the page server takes what
-stands upright on the floor (walls, furniture, boxes), seen from above, and lays it over
-a floor plan of what it has seen before. Where the two differ, the robot is not where the
-wheels say. The difference is kept as a correction, which the 3D view, the map and the
-trail use; the "odometry" line on the page shows the corrected pose and by how much the
-wheels were corrected.
+**Drive to a click**, then a click on the floor in the 3D view: the base drives there by
+itself. **Look around** turns it once on the spot, so that the camera has seen all there is
+to see from where it stands. **Stop**, or touching a controller, ends it at once.
 
-What it does and does not do:
+How it decides:
 
-- The floor plan keeps everything where it was first seen, so the robot's place is held
-  for as long as it sees something it has seen before. Driving a long way through new
-  surroundings and coming back by another way still adds up an error: there is no loop
-  closure. For one or a few rooms that does not matter; a building would need it.
-- Along a bare wall nothing says how far along the robot is. That direction is then left
-  to the wheels, and only the distance to the wall and the heading are corrected.
-- A comparison that disagrees with the wheels by more than 25 cm or 0.25 rad in one step
-  is not believed, and neither is one in which less than a third of the view is known.
-- It needs things standing within the camera's range (3.5 m). Facing an empty floor, the
-  wheels are on their own.
-- The correction lives in the page server. `obot-rtd`'s own odometry (`odom_x`, `odom_y`,
-  `odom_yaw` in the state) is the wheels alone, as before.
-- "Clear map" also clears the floor plan. `correct_odometry = false` under `[world]`
-  switches all of this off.
+- It only drives where it has *seen the floor to be free*, and keeps the middle of the
+  wheel axis 0.33 m from everything in the map and 0.27 m from floor it has not seen. The
+  map starts empty, and the camera looks forward only, so at first that is a wedge in front
+  of the robot.
+- To a place it has not seen a way to, it plans as if the unseen were free, drives the
+  part of that way it has seen, and plans again from there with what the camera saw on
+  the way. If there is nothing to drive, it looks around once; then it gives up and says
+  why under the view.
+- It only ever drives forwards, because that is where the camera looks, and turns on the
+  spot. Speeds are 0.25 m/s and 0.7 rad/s at most.
+- Whatever the plan says, it does not drive on when the depth camera sees something less
+  than 0.22 m in front of the base, when the middle of the depth picture has no readings
+  (a depth camera cannot see what is right in front of it), or when no pictures arrive.
+
+What it does not do: it does not see what is lower than 5 cm, glass, or what is above the
+camera's view close by (a table top at 30 cm). The back of the base swings through 0.36 m
+when it turns on the spot, and nothing looks there. Keep a hand near a controller.
+
+The map is saved every two minutes and when the page server stops
+(`~/.local/state/obot/`), and taken up again when it starts. It is only good for as long as
+`obot-rtd` keeps running: the map is in the frame of the wheel odometry, which starts at
+zero with the daemon, and nothing yet finds the robot's place in an old map.
+
+### The cameras correct the odometry (experimental, off)
+
+`correct_odometry = true` under `[world]` makes the page server lay each depth picture
+over a floor plan of what it has seen before and correct the wheels' pose by the
+difference. In simulation, with wheels that misreport by 6 % and 12 %, it holds the pose to
+a centimetre. **On the one real robot it was tried on, it did worse than the wheels
+alone**, which is why it is off: turning on the spot and driving a few metres on a garage
+floor, the wheels came back to within 2 mm and 0.1 degree of where they started, while the
+correction wandered off by up to 35 cm in between. What made the map smear on that robot
+was a wrong `track_width`, not slip. Before trusting it, record a drive and compare.
+
+Two things from those recordings that matter either way:
+
+- `track_width` and `wheel_radius` under `[base]` decide how good the odometry is. Turn
+  the robot on the spot: if walls come apart in the map as it turns, `track_width` is off.
+- A depth picture reaches the page server about 50 ms after it was taken (Jetson Nano,
+  D435 over V4L2); `latency` on a camera overrides that.
 
 ## Bringing up a real robot
 

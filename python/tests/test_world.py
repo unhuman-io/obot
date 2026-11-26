@@ -184,6 +184,7 @@ def scene_config() -> ToolsConfig:
     config.cameras = [CameraConfig(name="room", source="scene:color", **mount),
                       CameraConfig(name="room depth", source="scene:depth", color="room", **mount)]
     config.world.stride = 2
+    config.world.correct_odometry = True
     return config
 
 

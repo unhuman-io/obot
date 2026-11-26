@@ -64,8 +64,9 @@ class WorldConfig:
     stride: int = 4  # every n-th pixel of a depth picture in each direction
     rate: float = 5.0  # map updates per second and camera
     max_turn_rate: float = 1.0  # rad/s; while the base turns faster, pictures are not used
-    # Correct the wheel odometry with what the depth cameras on the base see of the map.
-    correct_odometry: bool = True
+    # Correct the wheel odometry with what the depth cameras on the base see. Experimental:
+    # on the one robot it was tried on, it did worse than the wheels alone.
+    correct_odometry: bool = False
 
 
 @dataclass

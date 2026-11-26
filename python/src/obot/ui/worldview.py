@@ -24,7 +24,10 @@ from .. import world
 from ..config import CameraConfig, ToolsConfig
 from . import model
 
-DEFAULT_LATENCY_S = 0.08  # a camera picture is about this old when it arrives
+# A camera picture is about this old when it arrives. Measured on a Jetson Nano with a D435
+# over V4L2: turning on the spot, the pictures line up best with the wheels 50 ms earlier
+# (clearly better than 35 or 65 ms).
+DEFAULT_LATENCY_S = 0.05
 
 
 class WorldView:
@@ -53,6 +56,12 @@ class WorldView:
         self.correction: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self.match: dict = {}  # how the last comparison with the map went, for the page
         self._difference = np.zeros(3)  # average of what the comparisons found: x, y, yaw
+        # For driving: how far ahead of the middle of the wheel axis the nearest thing is that
+        # a depth camera on the base sees in the base's way (m; inf: nothing), and when.
+        self.ahead: tuple[float, float] = (math.inf, 0.0)
+        # Also for driving: where the floor has been seen to be free, from above, as a grid
+        # of SEEN_CELL-sized squares around the origin of the map (see known()).
+        self._seen = np.zeros((2 * self.SEEN_HALF + 1, 2 * self.SEEN_HALF + 1), bool)
         self.plan = world.FloorPlan()
         self.update_ms = 0.0
         self.error: str | None = None
@@ -85,6 +94,7 @@ class WorldView:
             self._poses.append((time.monotonic(), x, y, yaw, yaw_rate, q))
         here = world.compose(self.correction, (x, y, yaw))
         self.map.add_pose(here[0], here[1])
+        self._stand(here[0], here[1])
 
     def _pose_at(self, t: float | None):
         with self._lock:
@@ -145,13 +155,17 @@ class WorldView:
             if c.source.startswith("scene:") and c.latency is None:
                 latency = 0.0
             taken = stamp - latency
-            if abs(self._pose_at(taken)[4]) > self.config.max_turn_rate:
-                continue  # a small error in time is a large error in place while turning
             k = c.intrinsics()
             points = world.depth_to_points(depth, k, self.config.stride, self.config.near, self.config.range)
+            if not c.link:
+                self._look_ahead(c, points, stamp, depth)
+            if abs(self._pose_at(taken)[4]) > self.config.max_turn_rate:
+                continue  # a small error in time is a large error in place while turning
             if self.config.correct_odometry and not c.link:
                 self._localize(c, points, taken)
             pose = self.camera_pose(c, taken)
+            if not c.link:
+                self._see_floor(c, points, taken, self.config.stride / k.fx)
             self.map.carve(pose, depth, k, self.config.near, self.config.range)
             rgb = None
             colour = self.colour.get(c.name)
@@ -163,6 +177,96 @@ class WorldView:
             self.map.integrate(world.apply(pose, points), rgb)
             used += 1
         return used
+
+    SEEN_CELL = 0.06  # m
+    SEEN_HALF = 250  # cells: the grid reaches 15 m each way
+    STAND = 0.24  # m: where the base stands, this much around the middle of its wheel axis is free
+
+    def _stand(self, x: float, y: float) -> None:
+        """Where the base is, there is nothing else."""
+        n = int(self.STAND / self.SEEN_CELL) + 1
+        i = int(math.floor(x / self.SEEN_CELL)) + self.SEEN_HALF
+        j = int(math.floor(y / self.SEEN_CELL)) + self.SEEN_HALF
+        limit = 2 * self.SEEN_HALF - n
+        if getattr(self, "_stood", None) == (i, j) or not (n <= i < limit and n <= j < limit):
+            return
+        self._stood = (i, j)
+        rows, columns = np.ogrid[-n:n + 1, -n:n + 1]
+        disc = (rows ** 2 + columns ** 2) * self.SEEN_CELL ** 2 <= self.STAND ** 2
+        self._seen[j - n:j + n + 1, i - n:i + n + 1] |= disc
+
+    def _see_floor(self, camera: CameraConfig, points: np.ndarray, taken: float, step: float) -> None:
+        """Note which floor a depth camera on the base sees to be free.
+
+        Where the camera sees the floor, the floor is free. And so is the stretch between
+        two places where it sees the floor one behind the other in the same direction with
+        nothing standing in between: the line of sight to the farther one passes so low
+        over that stretch that anything on it would have been in the way. The same goes for
+        the stretch from the camera to the first floor it sees in a direction."""
+        mount = self.mounts[camera.name]
+        p = world.apply(mount @ world.OPTICAL, points)
+        floor = np.abs(p[:, 2]) < 0.04
+        thing = (p[:, 2] > self.WAY_HEIGHT[0]) & (p[:, 2] < self.WAY_HEIGHT[1])
+        use = floor | thing
+        if not floor.any():
+            return
+        dx, dy = p[use, 0] - mount[0, 3], p[use, 1] - mount[1, 3]
+        is_floor = floor[use]
+        distance = np.hypot(dx, dy)
+        direction = np.rint(np.arctan2(dy, dx) / step).astype(np.int64)
+        order = np.lexsort((distance, direction))
+        direction, distance, is_floor = direction[order], distance[order], is_floor[order]
+        dx, dy = dx[order], dy[order]
+        # pairs of floor readings that follow each other in one direction
+        pair = np.nonzero((direction[1:] == direction[:-1]) & is_floor[1:] & is_floor[:-1]
+                          & (distance[1:] - distance[:-1] < 1.0))[0]
+        ends = [np.stack([dx[is_floor], dy[is_floor]], axis=1)]
+        t = np.linspace(0.0, 1.0, int(1.0 / (self.SEEN_CELL / 2)) + 2)[None, :, None]
+        long = pair[distance[pair + 1] - distance[pair] > self.SEEN_CELL / 2]
+        if len(long):
+            a = np.stack([dx[long], dy[long]], axis=1)[:, None, :]
+            b = np.stack([dx[long + 1], dy[long + 1]], axis=1)[:, None, :]
+            ends.append((a + (b - a) * t).reshape(-1, 2))
+        first = np.nonzero(np.r_[True, direction[1:] != direction[:-1]] & is_floor & (distance < 1.0))[0]
+        if len(first):
+            ends.append((np.stack([dx[first], dy[first]], axis=1)[:, None, :] * t).reshape(-1, 2))
+        local = np.concatenate(ends) + mount[:2, 3]
+        x, y, yaw = self.base_pose(taken)
+        c, s = math.cos(yaw), math.sin(yaw)
+        i = np.floor((x + c * local[:, 0] - s * local[:, 1]) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
+        j = np.floor((y + s * local[:, 0] + c * local[:, 1]) / self.SEEN_CELL).astype(np.int64) + self.SEEN_HALF
+        inside = (i >= 0) & (i <= 2 * self.SEEN_HALF) & (j >= 0) & (j <= 2 * self.SEEN_HALF)
+        self._seen[j[inside], i[inside]] = True
+
+    def known(self, origin, shape) -> np.ndarray:
+        """Which squares of a grid of SEEN_CELL have been seen to be free floor: the grid's
+        square [j, i] reaches from ((i + origin[0]) * SEEN_CELL, (j + origin[1]) * SEEN_CELL)."""
+        out = np.zeros(shape, bool)
+        i0, j0 = int(origin[0]) + self.SEEN_HALF, int(origin[1]) + self.SEEN_HALF
+        a, b = max(0, -j0), min(shape[0], 2 * self.SEEN_HALF + 1 - j0)
+        c, d = max(0, -i0), min(shape[1], 2 * self.SEEN_HALF + 1 - i0)
+        if a < b and c < d:
+            out[a:b, c:d] = self._seen[j0 + a:j0 + b, i0 + c:i0 + d]
+        return out
+
+    WAY_HALF_WIDTH = 0.26  # m: half the width of the base (0.22), and a little
+    WAY_HEIGHT = (0.05, 0.7)  # m above the floor: what is lower the wheels roll over
+
+    def _look_ahead(self, camera: CameraConfig, points: np.ndarray, stamp: float,
+                    depth: np.ndarray) -> None:
+        """Note how far ahead the nearest thing in the base's way is (self.ahead)."""
+        # A depth camera gives no reading for what is too close to it. So when the middle
+        # of the picture is mostly without readings, something may be right in front.
+        rows, columns = depth.shape
+        middle = depth[rows // 4: rows * 9 // 10: 4, columns * 3 // 10: columns * 7 // 10: 4]
+        if (middle == 0).mean() > 0.5:
+            self.ahead = (0.0, stamp)
+            return
+        p = world.apply(self.mounts[camera.name] @ world.OPTICAL, points)
+        height = (p[:, 2] > self.WAY_HEIGHT[0]) & (p[:, 2] < self.WAY_HEIGHT[1])
+        way = p[height & (np.abs(p[:, 1]) < self.WAY_HALF_WIDTH) & (p[:, 0] > 0.0), 0]
+        # a dozen readings, not one: single wrong readings are common
+        self.ahead = (float(np.partition(way, 11)[11]) if len(way) > 11 else math.inf, stamp)
 
     # --- where the robot is in the map -------------------------------------------------------
 
@@ -238,9 +342,42 @@ class WorldView:
                 self.error = str(e)
             self._stop.wait(max(0.01, period - (time.monotonic() - start)))
 
+    # --- keeping the map ---------------------------------------------------------------------
+
+    def save(self, path: str, frame: str) -> None:
+        """Write the map to a file. `frame` names the odometry it is in (a run of obot-rtd):
+        with other odometry the same numbers mean other places."""
+        saved = self.map.dump()
+        rows, columns = np.nonzero(self._seen)
+        saved.update(frame=np.array(frame), seen=np.stack([rows, columns], axis=1).astype(np.int32),
+                     correction=np.asarray(self.correction))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".part", "wb") as f:
+            np.savez_compressed(f, **saved)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(path + ".part", path)
+
+    def load(self, path: str, frame: str) -> bool:
+        """Take up the map saved in a file, if it is in the odometry `frame`. Returns
+        whether it was."""
+        try:
+            with np.load(path) as saved:
+                if str(saved["frame"]) != frame:
+                    return False
+                self.map.restore(saved)
+                self._seen[:] = False
+                self._seen[saved["seen"][:, 0], saved["seen"][:, 1]] = True
+                self.correction = tuple(float(v) for v in saved["correction"])
+            return True
+        except (OSError, KeyError, ValueError, IndexError):
+            return False
+
     def clear(self) -> None:
         self.map.clear()
         self.plan = world.FloorPlan()
+        self._seen[:] = False
+        self._stood = None
 
     def level(self) -> dict[str, dict]:
         """Work out how each base-mounted depth camera is tilted and how high it is from the

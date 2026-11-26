@@ -468,6 +468,39 @@ class WorldMap:
         with self._lock:
             return (self._index[self._shown].astype(np.float32) * self.voxel, self._rgb[self._shown].copy())
 
+    def dump(self) -> dict:
+        """Everything needed to make the same map again with restore(), as arrays."""
+        with self._lock, self._trail_lock:
+            return {"voxel": np.float64(self.voxel), "keys": self._keys.copy(), "index": self._index.copy(),
+                    "rgb": self._rgb.copy(), "hits": self._hits.copy(), "shown": self._shown.copy(),
+                    "trail": np.asarray(self._trail, np.float64).reshape(-1, 2)}
+
+    def restore(self, saved) -> None:
+        if abs(float(saved["voxel"]) - self.voxel) > 1e-9:
+            raise ValueError("the saved map has cells of another size")
+        with self._lock:
+            self._keys, self._index = np.asarray(saved["keys"], np.int64), np.asarray(saved["index"], np.int16)
+            self._rgb, self._hits = np.asarray(saved["rgb"], np.uint8), np.asarray(saved["hits"], np.uint8)
+            self._shown = np.asarray(saved["shown"], bool)
+            self.epoch = secrets.randbits(32) or 1  # for the pages it is a new map
+            self.rev = 1
+            self._horizon = 0
+            self._removed.clear()
+            self._changed = np.ones(len(self._keys), np.uint32)
+            self._seen = np.ones(len(self._keys), np.uint32)
+            with self._trail_lock:
+                self._trail = [(float(x), float(y)) for x, y in np.asarray(saved["trail"]).reshape(-1, 2)]
+                self._trail_start = 0
+
+    def obstacles(self, z_min: float = 0.05, z_max: float = 0.7) -> np.ndarray:
+        """Where the base cannot drive: (x, y) of the cells that have something between
+        z_min and z_max above the floor (N x 2, each place once)."""
+        with self._lock:
+            index = self._index[self._shown]
+        z = index[:, 2] * self.voxel
+        places = np.unique(index[(z > z_min) & (z < z_max), :2], axis=0)
+        return places.astype(np.float64) * self.voxel
+
     # --- building ------------------------------------------------------------------------
 
     def integrate(self, points: np.ndarray, rgb: np.ndarray | None = None) -> None:

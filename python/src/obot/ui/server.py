@@ -24,8 +24,9 @@ from pathlib import Path
 
 from aiohttp import WSMsgType, web
 
-from ..client import NotRunning, Request, Robot, describe
+from ..client import NotRunning, Request, Robot, RobotMode, describe
 from ..config import ToolsConfig
+from ..layout import BaseMode
 from ..teleop.mapper import GamepadState, InputWatch, TeleopMapper, button_request
 from . import model, plots
 
@@ -91,6 +92,10 @@ class UiServer:
         self.mapper: TeleopMapper | None = None
         self.cameras: dict = {}
         self.world = None  # the 3D map of the surroundings, if there is a depth camera
+        self.nav = None  # drives the base to a point on that map
+        self._nav_sent = False
+        self._nav_enable = 0.0
+        self._map_frame: str | None = None
         self._plot_t0: int | None = None
         self.sockets: dict[web.WebSocketResponse, Operator] = {}
         self.local: Operator | None = None
@@ -212,6 +217,15 @@ class UiServer:
                         self.world.clear()
                     elif data.get("action") == "level":   # fits a plane: not on the event loop
                         await asyncio.get_running_loop().run_in_executor(None, self.world.level)
+                    elif data.get("action") == "save":
+                        await asyncio.get_running_loop().run_in_executor(None, self._save_map)
+                elif data.get("type") == "nav" and self.nav is not None:
+                    if data.get("action") == "goto" and self._number(data.get("x")) and self._number(data.get("y")):
+                        self.nav.goto(float(data["x"]), float(data["y"]))
+                    elif data.get("action") == "look":
+                        self.nav.look_around()
+                    elif data.get("action") == "cancel":
+                        self.nav.cancel("stopped")
         finally:
             self.sockets.pop(ws, None)
             if self.controlling is operator:
@@ -264,6 +278,9 @@ class UiServer:
 
                 self.world = WorldView(self.config, self.cameras)
                 self.world.start()
+                from .navigate import Navigator
+
+                self.nav = Navigator(self.world)
         self._task = asyncio.create_task(self._loop())
 
     async def _stop(self, app: web.Application) -> None:
@@ -272,10 +289,68 @@ class UiServer:
             await self._task
         if self.world:
             self.world.stop()
+            self._save_map()
         for camera in self.cameras.values():
             camera.stop()
         if self.robot:
             self.robot.close()
+
+    @staticmethod
+    def _number(value) -> bool:
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and abs(value) < 1000
+
+    @property
+    def map_path(self) -> str:
+        """Where the map is kept between runs."""
+        base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+        return os.path.join(base, "obot", f"map-{self.config.shm_name}.npz")
+
+    def _save_map(self) -> None:
+        """The map is in the frame of the odometry, and that starts at zero with every run
+        of obot-rtd: a saved map is only good for the run it was made in."""
+        if self.world is not None and self._map_frame is not None and len(self.world.map):
+            with contextlib.suppress(OSError):
+                self.world.save(self.map_path, self._map_frame)
+
+    def _take_up_map(self, state) -> None:
+        """Once the daemon is there: which run of it is this, and is the saved map from it?"""
+        started = (int(state["t_real_ns"]) - int(state["cycle"]) * round(self.robot.info.period_s * 1e9)) / 1e9
+        self._map_frame = str(round(started))
+        if self.world is not None and not len(self.world.map):
+            for frame in (self._map_frame, str(round(started) - 1), str(round(started) + 1)):
+                if self.world.load(self.map_path, frame):
+                    self._map_frame = frame
+                    break
+
+    def _drive_to_point(self, operator, request: Request, state, command, dt: float) -> bool:
+        """While the base is being driven to a point on the map: put the speeds for that
+        into the command. Returns whether the command is to be sent."""
+        nav = self.nav
+        if nav is None:
+            return False
+        mode = int(state["mode"])
+        if nav.active:
+            if operator is not None:
+                nav.cancel("stopped: someone took the controls")
+            elif request in (Request.DISABLE, Request.ESTOP):
+                nav.cancel("stopped")
+            elif mode in (RobotMode.FAULT, RobotMode.ESTOP):
+                nav.cancel("stopped: the robot is not ready")
+        if not nav.active:
+            if self._nav_sent and operator is None:   # once more, with the speeds at zero
+                self._nav_sent = False
+                command["base_mode"], command["base_v"], command["base_omega"] = BaseMode.TWIST, 0.0, 0.0
+                return True
+            return False
+        v = w = 0.0
+        if mode == RobotMode.ACTIVE:
+            v, w = nav.step(dt)
+        elif mode == RobotMode.IDLE and time.monotonic() - self._nav_enable > 1.0:
+            self._nav_enable = time.monotonic()
+            self._queue(Request.ENABLE)
+        command["base_mode"], command["base_v"], command["base_omega"] = BaseMode.TWIST, v, w
+        self._nav_sent = True
+        return True
 
     def _connect(self) -> None:
         try:
@@ -366,6 +441,7 @@ class UiServer:
             if self.robot is not None and not self.robot.alive():
                 self.robot.close()
                 self.robot = self.mapper = None
+                self._map_frame = None
                 self.status["robot"] = "daemon stopped"
                 told_clients = False
             if self.robot is None:
@@ -383,6 +459,10 @@ class UiServer:
 
             self._poll_joystick()
             state = self.robot.state()
+            if state is not None and self._map_frame is None:
+                self._take_up_map(state)
+            if tick % (TICK_HZ * 120) == 0:
+                await asyncio.get_running_loop().run_in_executor(None, self._save_map)
             if self.world is not None and state is not None:
                 self.world.joint_names = self.robot.info.joint_names
                 self.world.update_pose(float(state["odom_x"]), float(state["odom_y"]), float(state["odom_yaw"]),
@@ -391,7 +471,8 @@ class UiServer:
             pad = operator.pad if operator else GamepadState()
             out = self.mapper.step(pad, state, dt)
             request = self._next_request()
-            if operator is not None or request != Request.NONE:
+            driving = self._drive_to_point(operator, request, state, out.command, dt)
+            if operator is not None or request != Request.NONE or driving:
                 self.robot.send(out.command, request)
             self.status.update(operator=operator.label if operator else None, group=out.group, moving=out.moving,
                                cartesian=out.cartesian)
@@ -404,6 +485,7 @@ class UiServer:
                                   "fps": round(c.fps, 1)}
                            for name, c in self.cameras.items()}
                 await self._broadcast({"type": "state", "status": self.status, "cameras": cameras,
+                                       "nav": self.nav.describe() if self.nav else None,
                                        # Where the cameras are does not need the state's rate.
                                        "world": self.world.describe() if self.world and tick % 9 == 0 else None,
                                        **describe(state, self.robot.info)})

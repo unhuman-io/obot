@@ -63,8 +63,9 @@ sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
 [base]
 left = "left_wheel_joint"
 right = "right_wheel_joint"
-wheel_radius = 0.125          # m, VERIFY
-track_width = 0.32            # m, VERIFY
+wheel_radius = 0.125          # m, 250 mm tyre
+track_width = 0.38756         # m, between tyre centres (CAD). Checked on the robot: turning on the
+                              # spot, the depth camera's pictures line up best with 0.385 to 0.388.
 v_max = 0.5
 omega_max = 1.5
 
@@ -114,4 +115,4 @@ color = "d435"                # colours the 3D points
 voxel = 0.03                  # m: size of a map cell
 range = 3.5                   # m: farther readings are not used
 max_voxels = 250000
-correct_odometry = true       # the depth camera corrects the wheel odometry (docs/host.md)
+correct_odometry = false      # experimental, see docs/host.md: on this robot the wheels alone do better

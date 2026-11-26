@@ -20,6 +20,7 @@
   header h1 { font-size: 16px; margin: 0; }
   .pill { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); font-weight: 600; }
   .pill.active { color: var(--ok); border-color: var(--ok); }
+  button.active { color: var(--ok); border-color: var(--ok); }
   .pill.idle, .pill.init { color: var(--muted); }
   .pill.fault, .pill.estop { color: var(--bad); border-color: var(--bad); }
   .spacer { flex: 1; }
@@ -107,6 +108,9 @@
         <button id="world-colour" title="Colour the map by what the camera saw, or by height above the floor">Colour: camera</button>
         <button id="world-level" title="Point the depth camera so that the floor fills a good part of its picture: its height and tilt are then worked out from the floor">Level to floor</button>
         <button id="world-clear" title="Forget what was seen and start the map again">Clear map</button>
+        <button id="nav-goto" title="Then click a place on the floor in the view below: the robot drives there by itself, around what is in the map, and stops for what its camera sees in the way. Touching the controller, or Stop, ends it.">Drive to a click</button>
+        <button id="nav-look" title="Turn once on the spot, so that the camera has seen all around">Look around</button>
+        <button id="nav-stop" title="Stop driving to the point">Stop</button>
       </span></h2>
     <div id="model"></div>
     <p id="world-note" class="muted"></p>
@@ -228,9 +232,10 @@ function showState(s) {
     const m = s.world.match || {};
     const seen = !("scan" in m) ? "" : m.used ? "cameras agree with the map (" + Math.round(m.share * 100) + " % of the view)" :
       m.share === undefined ? "cameras: nothing known in view" : "cameras: view not matched";
-    text("world-note", [s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update", seen,
+    text("world-note", [navNote(), s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update", seen,
                         s.world.error ? "error: " + s.world.error : "", ...leveled].filter(Boolean).join(" · "));
   }
+  if (s.nav !== undefined) showNav(s.nav);
   if (s.status) {
     text("operator", (s.status.cartesian ? "Cartesian mode  " : "") +
          (s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : ""));
@@ -302,6 +307,31 @@ function send(message) {
 document.querySelectorAll("button[data-request]").forEach((button) => {
   button.addEventListener("click", () => send({ type: "request", request: button.dataset.request }));
 });
+
+// --- driving to a place clicked on the floor --------------------------------------------------
+let navArmed = false, navLast = null;
+function showNav(nav) {
+  navLast = nav;
+  if (window.obotModel && window.obotModel.setNav) window.obotModel.setNav(nav);
+  $("nav-stop").disabled = !nav || !["planning", "driving", "looking"].includes(nav.state);
+}
+function navNote() {
+  if (navArmed) return "click a place on the floor to drive there";
+  if (!navLast || navLast.state === "idle") return navLast && navLast.note ? navLast.note : "";
+  const what = { planning: "finding a way", driving: "driving there", looking: "looking around", arrived: "arrived",
+                 failed: "did not get there" }[navLast.state] || navLast.state;
+  return what + (navLast.note ? ": " + navLast.note : "");
+}
+function armNav(on) {
+  navArmed = on;
+  $("nav-goto").classList.toggle("active", on);
+  if (window.obotModel && window.obotModel.onFloorClick) {
+    window.obotModel.onFloorClick(on ? (x, y) => { send({ type: "nav", action: "goto", x, y }); armNav(false); } : null);
+  }
+}
+$("nav-goto").addEventListener("click", () => armNav(!navArmed));
+$("nav-look").addEventListener("click", () => send({ type: "nav", action: "look" }));
+$("nav-stop").addEventListener("click", () => { armNav(false); send({ type: "nav", action: "cancel" }); });
 
 $("world-clear").addEventListener("click", () => send({ type: "world", action: "clear" }));
 $("world-level").addEventListener("click", () => send({ type: "world", action: "level" }));
