@@ -245,14 +245,14 @@ For that the configuration has to say where each camera is:
 [[camera]]
 name = "d435"
 source = "realsense:color"
-xyz = [0.10, 0.015, 0.40]       # m, in the base: x forward, y left, z up from the floor
-rpy = [0.0, 0.6, 0.0]           # rad; rpy[1] > 0 looks down
+xyz = [0.116, 0.0325, 0.143]    # m, in the base: x forward, y left, z up from the floor
+rpy = [0.0, 0.0, 0.0]           # rad; rpy[1] > 0 looks down (this one is level)
 
 [[camera]]
 name = "d435_depth"
 source = "realsense:depth"
-xyz = [0.10, 0.0, 0.40]
-rpy = [0.0, 0.6, 0.0]
+xyz = [0.116, 0.0175, 0.143]
+rpy = [0.0, 0.0, 0.0]
 color = "d435"                  # the camera whose picture colours the points
 # link = "wrist_camera_link"    # for a camera on the arm: a link of the robot model
 # hfov = 79.6                   # horizontal field of view, degrees (default: D435, 4:3)

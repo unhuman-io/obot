@@ -172,12 +172,19 @@ omega_max = 2.0               # rad/s
 # The RealSense colour streams show up as ordinary V4L2 devices; the device paths depend
 # on what is plugged in (`v4l2-ctl --list-devices`).
 
+# The base camera faces forward and is level. xyz is in the base (x forward, y left, z up
+# from the floor between the wheels): base_camera_link of the model, 120 mm ahead of the
+# wheel axis and 143 mm above the floor, and within the D435 the depth origin 17.5 mm left
+# of its centre and the colour sensor 15 mm further left.
+
 [[camera]]
 name = "base"
 source = "realsense:color"    # with two D435s: "realsense:<serial>:color"
 width = 640
 height = 480
 fps = 15
+xyz = [0.116, 0.0325, 0.143]
+rpy = [0.0, 0.0, 0.0]
 
 [[camera]]
 name = "base depth"
@@ -185,6 +192,9 @@ source = "realsense:depth"
 width = 640
 height = 480
 fps = 15
+xyz = [0.116, 0.0175, 0.143]
+rpy = [0.0, 0.0, 0.0]
+color = "base"
 
 # --- Arm geometry, for Cartesian teleoperation (read by the Python side) -----------------
 # Three pitch joints in one plane, then roll. Angles are measured in the arm's plane from

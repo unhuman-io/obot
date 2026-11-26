@@ -79,10 +79,16 @@ fps = 15
 # An Intel RealSense D435. On the Jetson Nano there is no librealsense; the kernel presents
 # the camera as video devices, and realsense: finds the right ones whatever their numbers.
 #
-# xyz and rpy say where the camera is on the base (x forward, y left, z up from the floor;
-# rpy[1] > 0 looks down). The 3D view on the operator page places what the depth camera
-# sees with them. VERIFY: these are a guess. "Level to floor" on the page works out height
-# and tilt from the floor in view and prints the values to put here.
+# xyz and rpy say where the camera is on the base (x forward, y left, z up from the floor
+# between the wheels; rpy[1] > 0 looks down). The 3D view on the operator page places what
+# the depth camera sees with them.
+#
+# The camera faces forward and is level, on its block at the front of the deck. From the
+# CAD model (base_camera_link in obot3.urdf): the centre of its front face is 120 mm ahead
+# of the wheel axis and 18.45 mm above it, so 143 mm above the floor with 125 mm wheels.
+# Within the camera (RealSense D435 data sheet) the depth origin is 17.5 mm to the left of
+# the centre and 4 mm behind the front glass, and the colour sensor 15 mm further left.
+# "Level to floor" on the page measures height and tilt from the floor in view, to check.
 
 [[camera]]
 name = "d435"
@@ -90,8 +96,8 @@ source = "realsense:color"
 width = 640
 height = 480
 fps = 15
-xyz = [0.10, 0.015, 0.40]     # the colour sensor is 15 mm to the left of the depth origin
-rpy = [0.0, 0.6, 0.0]
+xyz = [0.116, 0.0325, 0.143]
+rpy = [0.0, 0.0, 0.0]
 
 [[camera]]
 name = "d435_depth"
@@ -99,8 +105,8 @@ source = "realsense:depth"
 width = 640
 height = 480
 fps = 15
-xyz = [0.10, 0.0, 0.40]
-rpy = [0.0, 0.6, 0.0]
+xyz = [0.116, 0.0175, 0.143]
+rpy = [0.0, 0.0, 0.0]
 color = "d435"                # colours the 3D points
 
 # The map of what the depth cameras have seen. These are the defaults.
