@@ -33,7 +33,11 @@
   section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
   section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
   .cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
-  figure { margin: 0; }
+  figure { margin: 0; position: relative; }
+  /* what the segmentation network says, laid over the camera's picture: one square for each part of it */
+  figure canvas.labels { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; opacity: 0.45;
+                         image-rendering: pixelated; pointer-events: none; border-radius: 6px; }
+  .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin: 0 0.3em 0 0.8em; vertical-align: -0.05em; }
   figure img { width: 100%; display: block; background: #000; border-radius: 6px; aspect-ratio: 4 / 3; object-fit: contain; }
   figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
   .side { display: grid; gap: 12px; align-content: start; }
@@ -124,6 +128,7 @@
   </section>
   <section id="plan-section" style="display:none">
     <h2>Map from above</h2>
+    <p id="plan-labels" class="muted" style="display:none"></p>
     <canvas id="plan" title="Dark: something stands there (lighter: remembered to, and not in the 3D map now). Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. Wheel or two fingers: zoom. Drag: move. Double click: the whole map. With Drive to a click on, a click here sets where to go."></canvas>
   </section>
   <section>
@@ -423,6 +428,15 @@ function drawPlan() {
   plan.view = { scale, left, top, ratio, centre };
   context.imageSmoothingEnabled = false;
   context.drawImage(plan.picture, left, top, grid.width * scale, grid.height * scale);
+  if (labels && labels.squares.length) {      // what the network says the things are, in its colours
+    context.globalAlpha = 0.85;
+    for (const [i, j, kind] of labels.squares) {
+      context.fillStyle = "rgb(" + (labels.colours[kind] || [128, 128, 128]).join(",") + ")";
+      context.fillRect(left + (i - grid.i0) * scale, top + (grid.height - 1 - (j - grid.j0)) * scale,
+                       Math.ceil(scale), Math.ceil(scale));
+    }
+    context.globalAlpha = 1;
+  }
   const style = getComputedStyle(document.documentElement);
   const ok = style.getPropertyValue("--ok").trim() || "#2f9e44", accent = style.getPropertyValue("--accent").trim() || "#36c";
   if (navLast && navLast.goal && ["planning", "driving", "looking"].includes(navLast.state)) {
@@ -507,6 +521,51 @@ $("plan").addEventListener("pointerup", planRelease);
 $("plan").addEventListener("pointercancel", planRelease);
 $("plan").addEventListener("dblclick", () => { plan.zoom = 1; plan.centre = null; drawPlan(); });
 setInterval(pollPlan, 1000);
+
+// What a network on the robot's GPU says is in the colour camera's picture (if one runs):
+// laid over that picture, one translucent square for each part the network speaks of, and
+// on the map from above, the squares it has seen things of a kind standing in.
+let labels = null;
+async function pollLabels() {
+  if (!info.labels || pollLabels.busy) return;
+  pollLabels.busy = true;
+  try {
+    const response = await fetch("/api/labels" + location.search);
+    if (!response.ok) return;
+    labels = await response.json();
+    const swatch = (kind) => `<span class="swatch" style="background:rgb(${(labels.colours[kind] || [128, 128, 128]).join(",")})"></span>`
+      + labels.names[kind].split("/")[0];
+    const figure = [...document.querySelectorAll("#cameras figure")]
+      .find((f) => f.querySelector("img") && f.querySelector("img").alt === labels.camera + " camera");
+    if (figure && labels.columns && labels.said.length === labels.columns * labels.rows) {
+      let canvas = figure.querySelector("canvas.labels"), note = figure.querySelector(".labels-note");
+      if (!canvas) {
+        canvas = document.createElement("canvas");
+        canvas.className = "labels";
+        note = document.createElement("div");
+        note.className = "muted labels-note";
+        figure.append(canvas, note);
+      }
+      canvas.width = labels.columns;
+      canvas.height = labels.rows;
+      const context = canvas.getContext("2d"), image = context.createImageData(labels.columns, labels.rows);
+      const area = new Map();
+      labels.said.forEach((kind, k) => {
+        image.data.set([...(labels.colours[kind] || [128, 128, 128]), labels.sure[k] >= 128 ? 255 : 90], k * 4);
+        area.set(kind, (area.get(kind) || 0) + 1);
+      });
+      context.putImageData(image, 0, 0);
+      const most = [...area.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+      note.innerHTML = "The network sees:" + most.map(([kind, n]) =>
+        swatch(kind) + " " + Math.round(100 * n / labels.said.length) + " %").join("") + ` (${labels.ms} ms)`;
+    }
+    const kinds = [...new Set(labels.squares.map((square) => square[2]))].sort((a, b) => a - b);
+    $("plan-labels").style.display = kinds.length ? "" : "none";
+    $("plan-labels").innerHTML = "On the map, by what the network says they are:" + kinds.map(swatch).join("");
+    drawPlan();
+  } catch (e) { /* the next second will do */ } finally { pollLabels.busy = false; }
+}
+setInterval(pollLabels, 1000);
 new ResizeObserver(drawPlan).observe($("plan"));
 $("nav-look").addEventListener("click", () => send({ type: "nav", action: "look" }));
 $("nav-explore").addEventListener("click", () => {

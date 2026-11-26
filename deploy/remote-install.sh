@@ -6,6 +6,7 @@
 #   OBOT_ISOLATE  1: reserve OBOT_CPU on the kernel command line (takes effect after a reboot)
 #   OBOT_FORCE_CONFIG  1: replace an existing /etc/obot/robot.toml
 #   OBOT_TOOLS    1: install the Python tools and the operator page service
+#   OBOT_GPU      1: install TensorRT, and fetch the segmentation network and make it ready
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 user="${SUDO_USER:?run with sudo from the login user}"
@@ -27,6 +28,27 @@ elif ! cmp -s "$here/robot.toml" /etc/obot/robot.toml; then
 fi
 printf 'OBOT_RT_CPU=%s\nOBOT_RTD_ARGS=%s\n' "$cpu" "${OBOT_ARGS:-}" > /etc/default/obot-rtd
 obot-rtd --check --config /etc/obot/robot.toml
+
+# obot-segd, the network on the GPU: built here, because it needs TensorRT as NVIDIA installs
+# it on this robot. A robot without TensorRT goes without (--gpu installs it).
+if [ "${OBOT_GPU:-0}" = 1 ] && [ ! -e /usr/include/aarch64-linux-gnu/NvInfer.h ]; then
+    echo "== TensorRT (NVIDIA's packages for this release; 3.8 GB)"
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libnvinfer-dev \
+        libnvonnxparsers-dev libnvparsers-dev libnvinfer-plugin-dev cuda-cudart-dev-10-2 >/dev/null
+fi
+if [ -e /usr/include/aarch64-linux-gnu/NvInfer.h ] && [ -d "$here/gpu" ]; then
+    echo "== obot-segd"
+    sum="$(cat "$here"/gpu/* | sha256sum | cut -d' ' -f1)"
+    if [ ! -x /usr/local/bin/obot-segd ] || [ "$(cat /usr/local/share/obot-segd.sum 2>/dev/null)" != "$sum" ]; then
+        sh "$here/gpu/build.sh" /usr/local/bin/obot-segd.new
+        mv /usr/local/bin/obot-segd.new /usr/local/bin/obot-segd
+        mkdir -p /usr/local/share && echo "$sum" > /usr/local/share/obot-segd.sum
+    fi
+    if [ "${OBOT_GPU:-0}" = 1 ]; then
+        sh "$here/fetch-segmentation.sh" >/dev/null
+    fi
+fi
 
 getent group obot >/dev/null || groupadd --system obot
 id obot >/dev/null 2>&1 || useradd --system --no-create-home --gid obot --shell /usr/sbin/nologin obot

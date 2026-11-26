@@ -70,6 +70,17 @@ class WorldConfig:
 
 
 @dataclass
+class SegmentationConfig:
+    """A network on the GPU that says what is in the colour camera's picture
+    ([segmentation] in the configuration; used if there is a model and obot-segd)."""
+
+    model: str = ""  # the network, an .onnx file (with classes.txt and colors.txt beside it)
+    engine: str = ""  # where it is kept made ready for this GPU (default: the model's name + ".engine")
+    rate: float = 3.0  # pictures a second
+    camera: str = ""  # the colour camera to look through (default: the one that colours the depth camera's points)
+
+
+@dataclass
 class TeleopConfig:
     base_speed: float = 0.6  # fraction of the base's v_max / omega_max at full stick, before the boost trigger
     arm_speed: float = 0.5  # fraction of each joint's qd_max at full stick
@@ -101,6 +112,7 @@ class ToolsConfig:
     arm: ArmConfig | None = None
     urdf: str | None = None  # robot model for the operator page, [model] urdf = "..."
     world: WorldConfig = field(default_factory=WorldConfig)
+    segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
 
 
 def find_config(path: str | None = None) -> str | None:
@@ -143,6 +155,10 @@ def load(path: str | None = None) -> ToolsConfig:
                       ("stride", int), ("rate", float), ("max_turn_rate", float), ("correct_odometry", bool)):
         if key in world:
             setattr(config.world, key, kind(world[key]))
+    segmentation = doc.get("segmentation", {})
+    for key, kind in (("model", str), ("engine", str), ("rate", float), ("camera", str)):
+        if key in segmentation:
+            setattr(config.segmentation, key, kind(segmentation[key]))
     arm = doc.get("arm")
     if arm and arm.get("type") == "planar3r":
         config.arm = ArmConfig(list(arm["joints"]), [float(v) for v in arm["lengths"]],

@@ -95,6 +95,7 @@ class UiServer:
         self.cameras: dict = {}
         self.world = None  # the 3D map of the surroundings, if there is a depth camera
         self.nav = None  # drives the base to a point on that map
+        self.labels = None  # what a network on the GPU says the things on it are
         self._nav_sent = False
         self._nav_enable = 0.0
         self._map_frame: str | None = None
@@ -123,6 +124,7 @@ class UiServer:
         app.router.add_get("/api/model", self._model)
         app.router.add_get("/api/world", self._world)
         app.router.add_get("/api/grid", self._grid)
+        app.router.add_get("/api/labels", self._labels)
         app.router.add_get("/model/{path:.*}", self._mesh)
         app.router.add_static("/static", STATIC)
         app.on_startup.append(self._start)
@@ -158,6 +160,7 @@ class UiServer:
             # colours to paint them in: [r, g, b] for each of the 256 greys.
             "depth_cameras": [name for name, camera in self.cameras.items() if camera.config.is_depth],
             "depth_colours": self._depth_colours(),
+            "labels": self.labels is not None,
             "sim_cameras": [
                 {"name": c.name, "link": c.source.split(":")[1], "mode": (c.source.split(":") + ["color"])[2]}
                 for c in self.config.cameras if c.source.startswith("sim:") and self.enable_cameras
@@ -167,6 +170,13 @@ class UiServer:
             "plot_signals": plots.signals(info.joint_names) if info else [],
             "plot_rates": [r for r in plots.RATES if info and r <= round(1 / info.period_s)],
         }
+
+    async def _labels(self, request: web.Request) -> web.Response:
+        """What the segmentation network says: of the newest picture, and of the map's squares."""
+        if self.labels is None:
+            raise web.HTTPNotFound(text="no segmentation network is running")
+        body = await asyncio.get_running_loop().run_in_executor(None, self.labels.describe)
+        return web.json_response(body, headers={"Cache-Control": "no-store"})
 
     def _depth_colours(self) -> list:
         if not any(camera.config.is_depth for camera in self.cameras.values()):
@@ -240,6 +250,8 @@ class UiServer:
                 elif data.get("type") == "world" and self.world is not None:
                     if data.get("action") == "clear":
                         self.world.clear()
+                        if self.labels:
+                            self.labels.clear()
                     elif data.get("action") == "level":   # fits a plane: not on the event loop
                         await asyncio.get_running_loop().run_in_executor(None, self.world.level)
                     elif data.get("action") == "save":
@@ -319,12 +331,31 @@ class UiServer:
                 from .navigate import Navigator
 
                 self.nav = Navigator(self.world)
+                self._start_labels()
         self._task = asyncio.create_task(self._loop())
+
+    def _start_labels(self) -> None:
+        """The network that says what things are, if one is configured and can run here."""
+        wanted = self.config.segmentation
+        if not wanted.model:
+            return
+        from . import segment
+
+        program = segment.find()
+        if program is None or not os.path.exists(wanted.model):
+            print("obot ui: [segmentation] is configured but "
+                  + ("there is no obot-segd" if program is None else f"{wanted.model} is not there")
+                  + ": going without", file=sys.stderr)
+            return
+        self.labels = segment.Labels(self.config, self.cameras, self.world, program)
+        self.labels.start()
 
     async def _stop(self, app: web.Application) -> None:
         self._task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await self._task
+        if self.labels:
+            self.labels.stop()
         if self.world:
             self.world.stop()
             self._save_map()

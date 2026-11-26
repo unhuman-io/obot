@@ -111,6 +111,13 @@ xyz = [0.116, 0.0175, 0.143]
 rpy = [0.0, 0.0, 0.0]
 color = "d435"                # colours the 3D points
 
+# What the things around the robot are, said by a network on the GPU: laid over this
+# camera's picture on the page, and kept for the squares of the map from above. Used if the
+# robot has obot-segd and the network (deploy.sh --gpu sees to both); without, it goes without.
+[segmentation]
+model = "/var/lib/obot/models/FCN-ResNet18-SUN-RGBD-512x400/fcn_resnet18.onnx"
+rate = 3.0                    # pictures a second (one takes the GPU 40 ms on a Jetson Nano)
+
 # The map of what the depth cameras have seen. These are the defaults.
 [world]
 voxel = 0.03                  # m: size of a map cell

@@ -169,6 +169,15 @@ class WorldView:
             pose = pose @ self.links.pose(camera.link, joints)
         return pose @ self.mounts[camera.name] @ world.OPTICAL
 
+    def latency(self, c: CameraConfig) -> float:
+        """How much older a picture of this camera is than its stamp says, s."""
+        if c.latency is not None:
+            return c.latency
+        if c.source.startswith("scene:"):
+            return 0.0
+        stamped = getattr(self.cameras[c.name], "stamps_capture", False)
+        return CAPTURE_DELAY_S if stamped else DEFAULT_LATENCY_S
+
     def describe(self) -> dict:
         """For the page: how big the map is and where the cameras are (rows of the 3 x 4
         pose of each optical frame)."""
@@ -202,14 +211,7 @@ class WorldView:
             self._last[c.name] = stamp
             # When was it taken? The stamp says, if the camera knows; otherwise it is when the
             # picture arrived, which is later.
-            latency = c.latency
-            if latency is None:
-                if c.source.startswith("scene:"):
-                    latency = 0.0
-                else:
-                    stamped = getattr(self.cameras[c.name], "stamps_capture", False)
-                    latency = CAPTURE_DELAY_S if stamped else DEFAULT_LATENCY_S
-            taken = stamp - latency
+            taken = stamp - self.latency(c)
             k = c.intrinsics()
             if self.navd is not None:
                 used += self._step_native(c, depth, k, stamp, taken)

@@ -43,13 +43,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Deployment scripts
         run: |
-          for f in deploy/*.sh deploy/tests/*.sh deploy/rig/*.sh; do sh -n "$f"; done
+          for f in deploy/*.sh deploy/tests/*.sh deploy/rig/*.sh rt/gpu/*.sh; do sh -n "$f"; done
           sh deploy/tests/test-firmware-update.sh
       - name: clang-format
         run: |
           pipx install clang-format==21.1.8
           clang-format --version
-          clang-format --dry-run --Werror rt/src/*/*.cpp rt/include/obot/*/*.h rt/apps/*.cpp rt/tests/test_*.cpp
+          clang-format --dry-run --Werror rt/src/*/*.cpp rt/include/obot/*/*.h rt/apps/*.cpp rt/tests/test_*.cpp rt/gpu/*.cpp
 
   python:
     name: python ${{ matrix.python }}
@@ -154,7 +154,8 @@ jobs:
           unzip -q programs.zip -d programs
           tar -C programs -xzf programs/obot-rt-aarch64-static.tar.gz
       - name: Processor time
-        run: sh src/deploy/rig/cpu-test.sh programs/obot-rt-aarch64/bin
+        # (Measured there: 18 % and 38 %, with the segmentation network running on the GPU.)
+        run: sh src/deploy/rig/cpu-test.sh programs/obot-rt-aarch64/bin --idle-pct 30 --page-pct 55
 
   os-parse:
     # Checks that the Yocto layer and its pinned dependencies parse and that every package

@@ -36,6 +36,8 @@ read -r token || token=""
 
 id "$user" >/dev/null 2>&1 || useradd --system --create-home --home-dir "$home" --shell /usr/sbin/nologin "$user"
 chmod 750 "$home"
+# The GPU is what some jobs are here for (on a Jetson its devices belong to the group video).
+getent group video >/dev/null && usermod -aG video "$user"
 
 # --- the firewall rule -----------------------------------------------------------------------
 cat > /usr/local/sbin/obot-rig-firewall <<'FIREWALL'

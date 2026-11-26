@@ -14,13 +14,16 @@
 #                    that name or serial number, unless it already runs it (repeatable)
 #   --jump HOST      reach the robot through this ssh host
 #   --verify-only    change nothing, only run the checks
+#   --gpu            a Jetson's GPU for the segmentation network: installs NVIDIA's TensorRT
+#                    packages for the robot's OS release (3.8 GB), builds obot-segd there,
+#                    fetches the network and makes it ready (minutes, the first time)
 #   --cpu-test       after the checks, measure what the software costs in processor time
 #                    (obot cpu-test on the robot, half a minute); over its limits fails
 #
 # Needs here: cmake, ninja, git, g++-aarch64-linux-gnu (the first build fetches libudev-zero). On the robot: ssh with a key and
 # passwordless sudo. Running it again is safe. Exit status is that of the checks.
 set -eu
-cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0 firmware="" cpu_test=0
+cpu=-1 isolate=0 reboot=0 args="" force=0 tools=1 jump="" verify_only=0 firmware="" cpu_test=0 gpu=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --cpu) cpu="$2"; shift 2 ;;
@@ -33,6 +36,7 @@ while [ $# -gt 0 ]; do
         --firmware) firmware="$firmware $2"; shift 2 ;;
         --verify-only) verify_only=1; shift ;;
         --cpu-test) cpu_test=1; shift ;;
+        --gpu) gpu=1; shift ;;
         -*) echo "unknown option $1" >&2; exit 2 ;;
         *) break ;;
     esac
@@ -42,7 +46,7 @@ config="${2:?robot configuration, e.g. config/obot1.toml}"
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 opts="-o BatchMode=yes -o LogLevel=ERROR -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 [ -n "$jump" ] && opts="$opts -J $jump"
-env="OBOT_CPU=$cpu OBOT_ISOLATE=$isolate OBOT_TOOLS=$tools OBOT_FORCE_CONFIG=$force OBOT_ARGS=$args"
+env="OBOT_CPU=$cpu OBOT_ISOLATE=$isolate OBOT_TOOLS=$tools OBOT_FORCE_CONFIG=$force OBOT_GPU=$gpu OBOT_ARGS=$args"
 run() { ssh $opts "$target" "$@"; }
 
 verify() {
@@ -79,7 +83,8 @@ if [ -f "$config" ]; then cp "$config" "$stage/obot/robot.toml"; else cp "$repo/
 cp -r "$repo/description" "$stage/obot/description"
 mkdir "$stage/obot/python" && cp -r "$repo/python/src" "$repo/python/pyproject.toml" "$repo/python/README.md" "$stage/obot/python/"
 mkdir "$stage/obot/firmware"
-cp "$repo/deploy/firmware-update.sh" "$stage/obot/"
+cp "$repo/deploy/firmware-update.sh" "$repo/deploy/fetch-segmentation.sh" "$stage/obot/"
+cp -r "$repo/rt/gpu" "$stage/obot/gpu"   # built on the robot, if it has what that needs
 for entry in $firmware; do
     board="${entry%%=*}"; package="${entry#*=}"
     [ "$board" != "$entry" ] && [ -f "$package" ] || { echo "--firmware $entry: expected BOARD=PACKAGE.tgz, and the package must exist" >&2; exit 2; }

@@ -73,9 +73,11 @@ def find(port: int) -> dict[str, list[int]]:
         children = [child for child, p in all_of_them.items() if p["parent"] == pid]
         return children + [grand for child in children for grand in below(child)]
 
-    groups: dict[str, list[int]] = {"page server": [server], "obot-navd": [], "reading cameras": [], "obot-rtd": []}
+    groups: dict[str, list[int]] = {"page server": [server], "obot-navd": [], "obot-segd": [],
+                                    "reading cameras": [], "obot-rtd": []}
     for pid in below(server):
-        groups["obot-navd" if all_of_them[pid]["name"] == "obot-navd" else "reading cameras"].append(pid)
+        name = all_of_them[pid]["name"]
+        groups[name if name in ("obot-navd", "obot-segd") else "reading cameras"].append(pid)
     # obot-rtd: the one this page server talks to, if it says which (--shm-name), else any.
     words = all_of_them[server]["arguments"].split()
     shm = words[words.index("--shm-name") + 1] if "--shm-name" in words[:-1] else None

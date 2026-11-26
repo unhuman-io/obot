@@ -436,6 +436,48 @@ degrees, which is 0.01 % over four turns and 3 ms.
 The same test runs in CI against the simulated robot (`test_navigate.py`), once as it is
 and once told that the pictures are 60 ms older than they are, which it has to find.
 
+### What things are: a network on the GPU
+
+```
+deploy/deploy.sh --gpu ...     # once per robot: TensorRT, obot-segd, the network (see below)
+```
+
+With `[segmentation]` in the configuration and a Jetson's GPU, a segmentation network looks
+at the colour camera's picture a few times a second and says what is in it. The page lays
+that over the camera's picture, one translucent square for each part the network speaks of,
+and names the most common classes under it. The depth picture of the same moment says where
+each part of the colour picture is in the room, so every square of the map from above
+collects votes for the classes of what stands in it; once a square has a few, it is drawn
+in the colour of the class with the most. `/api/labels` has both. **Nothing drives by it
+yet**: it is what is known about a square.
+
+| | |
+|---|---|
+| the network | FCN-ResNet18 trained on SUN RGB-D, from the jetson-inference project (MIT): 21 classes of things in rooms (floor, wall, chair, table, clothes, person, ...) |
+| what it looks at, what it says | a 512 x 400 picture; one class for each 32 x 32 pixels of it, 16 x 13 in all |
+| on a Jetson Nano | 39 ms a picture on the GPU; at 3 pictures a second obot-segd uses 1.5 % of a processor and the page server 3 % more, the GPU is busy two fifths of the time; 870 MB of memory |
+| making it ready | 3.5 minutes, once per robot (TensorRT builds the network for that GPU); 10 s to load after that |
+
+How good it is: on four pictures from r1's cameras in a garage, it finds the floor, and gets
+the rest wrong in the way a network trained on bedrooms and offices would: a truck is
+"wall" and "chair", a concrete footing "table" and "bed". 16 x 13 parts is also coarse: a
+part is 15 cm across at 2 m. It tells a chair from a wall in a room; it does not find a sock.
+So what is here is the way from a picture to the map, measured and tested, and a network
+that is a placeholder for one trained on what this robot sees.
+
+The parts:
+
+- `obot-segd` (`rt/gpu/`) runs the network with TensorRT and is asked like obot-navd is.
+  It is built on the robot, not with the rest: it needs NVIDIA's libraries as they are
+  installed there (on L4T R32: TensorRT 7.1, CUDA 10.2, a C++14 compiler), and NVIDIA's
+  Python bindings there are for the OS's Python 3.6, not ours.
+- `deploy.sh --gpu` installs those libraries (3.8 GB from NVIDIA's repository for the
+  robot's release), and every deployment after that builds obot-segd if its source
+  changed. `--gpu` also fetches the network (checked against its sum) to
+  `/var/lib/obot/models` and makes it ready.
+- A robot without any of it goes without: the page server says so once in its log.
+- In tests, `tests/fake/obot-segd` stands in for it: no GPU there.
+
 ### What it costs in processor time: `obot cpu-test`
 
 ```
@@ -463,6 +505,9 @@ simulated actuators (`deploy.sh --sim`) and `OBOT_UI_ARGS=--replay-cameras room`
 | nobody on the page | 5 % | 10 % | 2 % |
 | a page open, three camera streams | 24 % | 9 % | 2 % |
 
+(With the segmentation network running as well: 8 % and 28 % for the page server, 1.5 % for
+obot-segd.)
+
 Where the page server's time goes with a page open: making JPEGs of the camera pictures
 (OpenCV, not Python), writing them and the websocket to the network, and the 50 Hz loop
 that passes the operator's controller on (6 %). Two things keep it there:
@@ -479,6 +524,29 @@ The hardware JPEG encoder of a Jetson (`nvjpegenc`) takes 0.6 ms of processor fo
 640 x 480 picture where OpenCV takes 5; fed from Python through a pipe that advantage is
 mostly gone (measured: 3 to 5 ms in all). It pays where the camera feeds it without the
 picture passing through Python, as the `gst:` source of the CSI camera does.
+
+### The test rig in CI
+
+The `rig` job of the CI workflow runs on such a computer (tv, a Jetson Nano): it takes the
+aarch64 programs that the same run built, starts obot-rtd on simulated actuators and the
+page server with replayed cameras as the runner's own user, next to whatever is deployed
+there, and runs `obot cpu-test` on them with limits (`deploy/rig/cpu-test.sh`; it can be
+run by hand the same way). It takes two minutes.
+
+A runner of our own executes what a workflow tells it to, on our network, and this
+repository is public. What stands between that and the rig, set up by
+`deploy/rig/setup-runner.sh` (run on the rig as root, with a registration token on its
+input) and by two settings of the repository:
+
+| | |
+|---|---|
+| who can start a job there | The runner checks every job before its first step, on the rig and not in the repository: only pushes and manual or scheduled runs of `unhuman-io/obot`'s own workflows. A pull request's job is refused there whatever anybody approved. Its only label is `obot-rig`: `runs-on: self-hosted` does not match it. |
+| in the repository's settings | Workflows of all outside contributors wait for approval. The default token is read-only. |
+| what a job can reach | The runner's user (`ghrunner`) has no sudo and no login. A firewall rule for that user rejects everything on the local network (other robots and their operator pages, your computers); the internet and the rig itself remain. The service cannot see `/home`, cannot write outside its own directory, and cannot gain privileges. It is in the group `video`, for the GPU. |
+| what is left | Whoever can push to the repository can run code on the rig as `ghrunner`. A job can use the rig's processor, GPU, disk space and internet connection, and reach what the rig itself serves on localhost (its simulated robot's page). |
+
+The runner's OS (Ubuntu 18.04) is too old for the Node that `actions/checkout` and other
+JavaScript actions need; the job's steps are shell only.
 
 ## Bringing up a real robot
 

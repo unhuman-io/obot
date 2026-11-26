@@ -32,6 +32,15 @@ if [ "${OBOT_TOOLS:-1}" = 1 ]; then
     check "operator page answers" "curl -sf -m 3 http://127.0.0.1:8080/api/info | grep -q '\"robot\"'"
     # The page and every script it loads are part of the installed package.
     check "operator page has its scripts" "curl -sf -m 3 -o /dev/null http://127.0.0.1:8080/ && curl -sf -m 3 -o /dev/null http://127.0.0.1:8080/static/model.js && curl -sf -m 3 -o /dev/null http://127.0.0.1:8080/static/vendor/three.module.min.js"
+    # The network on the GPU, where the robot has one and its configuration asks for it.
+    if [ -x /usr/local/bin/obot-segd ] && grep -q '^\[segmentation\]' /etc/obot/robot.toml &&
+        [ -s "$(sed -n '/^\[segmentation\]/,/^\[/ s/^model *= *"\(.*\)".*/\1/p' /etc/obot/robot.toml | head -1)" ]; then
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            curl -sf -m 2 http://127.0.0.1:8080/api/labels | grep -q '"ready": true' && break
+            sleep 2
+        done
+        check "the segmentation network is running on the GPU" "curl -sf -m 3 http://127.0.0.1:8080/api/labels | grep -q '\"ready\": true'"
+    fi
     # It has to say something too: a damaged (empty) program also exits with 0.
     check "robot is idle and healthy (obot status)" "sg obot -c '$HOME/obot-venv/bin/obot status' | grep -q . && sg obot -c '$HOME/obot-venv/bin/obot status'"
 fi
