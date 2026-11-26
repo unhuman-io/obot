@@ -88,16 +88,19 @@ case "${GITHUB_WORKFLOW_REF:-}" in
     *) refuse "the workflow is not one of $allowed's own" ;;
 esac
 # Start from nothing: what an earlier job left running, and its files.
-pkill -KILL -u ghrunner -x obot-rtd; pkill -KILL -u ghrunner -x obot-navd; pkill -KILL -u ghrunner -x obot-sim-node
-pkill -KILL -u ghrunner -f 'venv/bin/obot '
-[ -n "${GITHUB_WORKSPACE:-}" ] && [ -d "$GITHUB_WORKSPACE" ] && find "$GITHUB_WORKSPACE" -mindepth 1 -delete
+# (The runner runs this with -e: a pkill that finds nothing must not count as a failure.)
+for name in obot-rtd obot-navd obot-sim-node; do pkill -KILL -u ghrunner -x "$name" || true; done
+pkill -KILL -u ghrunner -f 'venv/bin/obot ' || true
+if [ -n "${GITHUB_WORKSPACE:-}" ] && [ -d "$GITHUB_WORKSPACE" ]; then
+    find "$GITHUB_WORKSPACE" -mindepth 1 -delete || true
+fi
 exit 0
 HOOK
 cat > /usr/local/lib/obot-rig/job-completed.sh <<'HOOK'
 #!/bin/bash
 # Run by the runner after a job, however it ended: nothing of it keeps running.
-pkill -KILL -u ghrunner -x obot-rtd; pkill -KILL -u ghrunner -x obot-navd; pkill -KILL -u ghrunner -x obot-sim-node
-pkill -KILL -u ghrunner -f 'venv/bin/obot '
+for name in obot-rtd obot-navd obot-sim-node; do pkill -KILL -u ghrunner -x "$name" || true; done
+pkill -KILL -u ghrunner -f 'venv/bin/obot ' || true
 exit 0
 HOOK
 chmod 755 /usr/local/lib/obot-rig/*.sh
