@@ -1,0 +1,11 @@
+build
+__pycache__/
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.mcap
+*.rrd
+# Yocto / kas work directories
+os/build/
+os/.kas*

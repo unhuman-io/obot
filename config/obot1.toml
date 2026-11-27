@@ -1,0 +1,169 @@
+# obot v1: Jetson Nano, differential drive base and a five joint arm. Every actuator is an
+# obot-controller board on USB through the usb_rt kernel driver (the boards are found by
+# name, the same names `motor_util` lists).
+#
+# Names and gear ratios come from the old obot-realtime/config/param.yaml:
+#   motors: ["wl", "wr", "J1", "j2", "j3", "j4", "j5"], gear_ratio: [1, 1, 100, ...]
+# Everything marked VERIFY is a placeholder: limits, signs, zero offsets, torque constants
+# and the base geometry were not recorded in the old code. The limits and gains below are
+# deliberately timid; widen them on the real robot.
+
+[robot]
+name = "obot1"
+period_us = 1000
+command_timeout_ms = 150
+comm_timeout_cycles = 10
+
+[rt]
+cpu = 3                       # the Nano has four cores; isolate the last one (isolcpus=3)
+priority = 80
+lock_memory = true
+
+[[bus]]
+name = "usb"
+interface = "usbrt"
+
+# --- Base ------------------------------------------------------------------------------
+
+# Signs: every joint has direction 1 (the default, so the key is not written). Which way is
+# positive is settled in each motor controller's firmware (phase order and encoder
+# direction), so that the host never has to know how a motor is mounted: a positive wheel
+# velocity drives the robot forward on both sides.
+#
+# wrap: the wheel firmware keeps its position within plus or minus its encoder rollover (one
+# revolution here) and jumps by twice that, two revolutions, at either end. The daemon
+# counts the turns up again. The value is that jump: 2 * the firmware's `mrollover`.
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "usb"
+usb_name = "wl"
+id = 1
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+continuous = true
+wrap = 12.5663706             # rad: the firmware position runs over +-1 revolution
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[[joint]]
+name = "right_wheel_joint"
+bus = "usb"
+usb_name = "wr"
+id = 2
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+continuous = true
+wrap = 12.5663706             # rad: the firmware position runs over +-1 revolution
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[base]
+left = "left_wheel_joint"
+right = "right_wheel_joint"
+wheel_radius = 0.125          # m, VERIFY
+track_width = 0.32            # m, VERIFY
+v_max = 0.5
+omega_max = 1.5
+
+# --- Arm -------------------------------------------------------------------------------
+# j0 (base yaw) .. j4 in the old URDF, driven by the boards J1, j2 .. j5.
+
+[[joint]]
+name = "j0"
+bus = "usb"
+usb_name = "J1"
+id = 3
+gear_ratio = 100.0
+torque_constant = 0.05        # N m / A at the motor, VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.57                 # VERIFY
+q_max = 1.57                  # VERIFY
+qd_max = 1.0
+qdd_max = 4.0
+tau_max = 10.0
+kp = 60.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.5 }
+
+[[joint]]
+name = "j1"
+bus = "usb"
+usb_name = "j2"
+id = 4
+gear_ratio = 100.0
+torque_constant = 0.05        # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.57                 # VERIFY
+q_max = 1.57                  # VERIFY
+qd_max = 1.0
+qdd_max = 4.0
+tau_max = 10.0
+kp = 60.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.5 }
+
+[[joint]]
+name = "j2"
+bus = "usb"
+usb_name = "j3"
+id = 5
+gear_ratio = 100.0
+torque_constant = 0.05        # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.57                 # VERIFY
+q_max = 1.57                  # VERIFY
+qd_max = 1.0
+qdd_max = 4.0
+tau_max = 10.0
+kp = 40.0
+kd = 1.5
+sim = { inertia = 0.1, damping = 0.3 }
+
+[[joint]]
+name = "j3"
+bus = "usb"
+usb_name = "j4"
+id = 6
+gear_ratio = 100.0
+torque_constant = 0.05        # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.57                 # VERIFY
+q_max = 1.57                  # VERIFY
+qd_max = 1.5
+qdd_max = 6.0
+tau_max = 5.0
+kp = 20.0
+kd = 0.8
+sim = { inertia = 0.03, damping = 0.1 }
+
+[[joint]]
+name = "j4"
+bus = "usb"
+usb_name = "j5"
+id = 7
+gear_ratio = 100.0
+torque_constant = 0.05        # VERIFY
+zero_offset = 0.0             # VERIFY
+q_min = -1.57                 # VERIFY
+q_max = 1.57                  # VERIFY
+qd_max = 1.5
+qdd_max = 6.0
+tau_max = 5.0
+kp = 20.0
+kd = 0.8
+sim = { inertia = 0.01, damping = 0.05 }
+
+# --- Operator tools (read by the Python side, ignored by obot-rtd) ----------------------
+
+[[camera]]
+name = "front"
+# The CSI camera on the Jetson Nano, through NVIDIA's camera source and JPEG encoder.
+source = "gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=15/1 ! nvjpegenc"
+fps = 15

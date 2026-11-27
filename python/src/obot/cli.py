@@ -1,0 +1,286 @@
+"""The `obot` command.
+
+    obot status                 one-line summary and the joints
+    obot watch                  the same, continuously
+    obot enable | disable | clear | stop
+    obot ui                     operator web page: cameras, state, gamepad driving
+    obot teleop                 drive with a controller plugged into the robot, no web page
+    obot record out.mcap        log every state record to an MCAP file
+    obot viz                    live plots in the Rerun viewer
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+import time
+
+import numpy as np
+
+from . import config as config_module
+from .client import NotRunning, Request, Robot, RobotMode, describe
+
+
+def _robot(args) -> Robot:
+    name = args.shm_name or config_module.load(args.config).shm_name
+    return Robot(name)
+
+
+def _print_status(robot: Robot, state) -> None:
+    d = describe(state, robot.info)
+    flags = ", ".join(d["faults"] + d["warnings"]) or "ok"
+    print(f"{robot.info.name}: {d['mode']} [{flags}]  loop late {d['wake_latency_us']:.0f} us, "
+          f"cycle {d['exec_us']:.0f} us, overruns {d['overruns']}")
+    print(f"  {'joint':<24}{'mode':<10}{'q':>9}{'qd':>9}{'tau':>9}{'temp':>7}  faults")
+    for i, joint in enumerate(d["joints"]):
+        temp = d["temperature"][i]
+        print(f"  {joint['name']:<24}{joint['mode']:<10}{d['q'][i]:>9.3f}{d['qd'][i]:>9.3f}{d['tau'][i]:>9.2f}"
+              f"{'-' if temp is None else format(temp, '.0f'):>7}  {', '.join(joint['faults'])}")
+    if robot.info.has_base:
+        x, y, yaw = d["odom"]
+        print(f"  base: {d['base_v']:.2f} m/s, {d['base_omega']:.2f} rad/s, odometry x {x:.2f} y {y:.2f} "
+              f"yaw {np.degrees(yaw):.0f} deg")
+
+
+def cmd_status(args) -> int:
+    with _robot(args) as robot:
+        state = robot.wait_for(lambda s: True, timeout=1.0)
+        if state is None:
+            print("no state yet", file=sys.stderr)
+            return 1
+        _print_status(robot, state)
+        return 0 if state["mode"] in (RobotMode.IDLE, RobotMode.ACTIVE) else 3
+
+
+def cmd_watch(args) -> int:
+    with _robot(args) as robot:
+        while robot.alive():
+            state = robot.state()
+            if state is not None:
+                print("\033[2J\033[H", end="")
+                _print_status(robot, state)
+            time.sleep(0.2)
+    return 0
+
+
+def cmd_request(args) -> int:
+    with _robot(args) as robot:
+        if args.command == "enable":
+            ok = robot.enable()
+        elif args.command == "disable":
+            ok = robot.disable()
+        elif args.command == "clear":
+            ok = robot.clear_faults()
+        else:
+            robot.estop()
+            ok = robot.wait_mode(RobotMode.ESTOP, 1.0) is not None
+        state = robot.state()
+        mode = RobotMode(int(state["mode"])).name.lower() if state is not None else "unknown"
+        print(f"{robot.info.name}: {mode}")
+        return 0 if ok else 1
+
+
+def cmd_ui(args) -> int:
+    from .ui import server
+
+    tools = config_module.load(args.config)
+    if args.shm_name:
+        tools.shm_name = args.shm_name
+    if args.test_camera:
+        tools.cameras = [config_module.CameraConfig(name="test", source="test")]
+    if args.replay_cameras:
+        # The cameras as configured (names, sizes, where they are mounted), fed from a file.
+        for camera in tools.cameras:
+            camera.source = f"replay:{args.replay_cameras}:{'depth' if camera.is_depth else 'color'}"
+    if args.sim_cameras:
+        tools.cameras = [
+            config_module.CameraConfig(name=f"{where} {mode}", source=f"sim:{link}:{mode}")
+            for where, link in (("base", "base_camera_link"), ("gripper", "wrist_camera_link"))
+            for mode in ("color", "depth")
+        ]
+        # The same kind of room drawn on this side as real pictures, which is what the 3D
+        # world view is built from.
+        mount = {"xyz": (0.15, 0.0, 0.5), "rpy": (0.0, 0.5, 0.0), "width": 320, "height": 240, "fps": 10}
+        tools.cameras += [
+            config_module.CameraConfig(name="room", source="scene:color", **mount),
+            config_module.CameraConfig(name="room depth", source="scene:depth", color="room", **mount),
+        ]
+    where = f"http://{'<this machine>' if args.host == '0.0.0.0' else args.host}:{args.port}/"
+    print(f"obot ui: {where}{'?token=...' if args.token else ''}", file=sys.stderr)
+    if not args.token and args.host == "0.0.0.0":
+        print("obot ui: anyone who can reach this port can drive the robot; see --token", file=sys.stderr)
+    server.run(tools, host=args.host, port=args.port, token=args.token, joystick=args.joystick,
+               cameras=not args.no_cameras)
+    return 0
+
+
+def cmd_teleop(args) -> int:
+    from .teleop.joystick import Joystick
+    from .teleop.mapper import InputWatch, TeleopMapper
+
+    tools = config_module.load(args.config)
+    joystick = Joystick(args.joystick)
+    print(f"obot teleop: {joystick.path}", file=sys.stderr)
+    if args.show:
+        while joystick.connected:
+            pad = joystick.poll()
+            axes = " ".join(f"{a:+.2f}" for a in pad.axes)
+            buttons = "".join("1" if b > 0.5 else "." for b in pad.buttons)
+            print(f"\raxes {axes}  buttons {buttons}  LT {pad.buttons[6]:.2f} RT {pad.buttons[7]:.2f}", end="")
+            time.sleep(0.05)
+        return 1
+    with Robot(args.shm_name or tools.shm_name) as robot:
+        mapper = TeleopMapper(robot.info, tools.teleop, tools.base_v_max, tools.base_omega_max, tools.arm)
+        dt = 0.02
+        next_tick = time.monotonic()
+        watch = InputWatch(tools.teleop.controller_timeout_s)
+        while robot.alive() and joystick.connected:
+            out = mapper.step(watch.filter(joystick.poll(), time.monotonic()), robot.state(), dt)
+            robot.send(out.command, out.request)
+            next_tick += dt
+            time.sleep(max(0.0, next_tick - time.monotonic()))
+        # A neutral command on the way out; the daemon's command timeout covers a crash.
+        robot.send(None, Request.NONE)
+    print("obot teleop: controller or daemon gone", file=sys.stderr)
+    return 1
+
+
+def cmd_record(args) -> int:
+    from .log import record
+
+    with _robot(args) as robot:
+        return record(robot, args.output, duration=args.duration, decimate=args.decimate)
+
+
+def cmd_viz(args) -> int:
+    from .viz import run
+
+    with _robot(args) as robot:
+        return run(robot, save=args.save, connect=args.connect, urdf=args.urdf, duration=args.duration)
+
+
+def cmd_map_test(args) -> int:
+    import asyncio
+
+    from .ui import maptest
+
+    if not args.yes:
+        print(f"The robot will forget its map, turn on the spot {args.turns + 3} times"
+              + ("" if args.no_drive else ", drive about a metre and back, and turn once more")
+              + ",\nby itself. It needs room to turn. Have a controller or the page at hand to stop it. Go on? [y/N] ",
+              end="", flush=True)
+        if sys.stdin.readline().strip().lower() not in ("y", "yes"):
+            return 2
+    limits = {name: getattr(args, name) for name in maptest.LIMITS if getattr(args, name) is not None}
+    out = args.out or os.path.join(os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "obot",
+                                   "map-test-" + time.strftime("%Y%m%d-%H%M%S"))
+    return asyncio.run(maptest.run(args.url, args.turns, not args.no_drive, out, limits))
+
+
+def cmd_cpu_test(args) -> int:
+    import asyncio
+
+    from .ui import cputest
+
+    limits = {name: getattr(args, name) for name in cputest.LIMITS if getattr(args, name) is not None}
+    return asyncio.run(cputest.run(args.url, args.seconds, args.out, limits))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="obot", description=__doc__.split("\n")[0])
+    parser.add_argument("--config", help="robot configuration (default: $OBOT_CONFIG or /etc/obot/robot.toml)")
+    parser.add_argument("--shm-name", help="shared memory name of the daemon (default: from the configuration)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("status", help="print the robot's state").set_defaults(func=cmd_status)
+    sub.add_parser("watch", help="print the robot's state continuously").set_defaults(func=cmd_watch)
+    for name, text in (("enable", "start following commands"), ("disable", "stop following commands"),
+                       ("clear", "clear latched faults"), ("stop", "emergency stop")):
+        sub.add_parser(name, help=text).set_defaults(func=cmd_request)
+
+    ui = sub.add_parser("ui", help="operator web page")
+    ui.add_argument("--host", default="0.0.0.0")
+    ui.add_argument("--port", type=int, default=8080)
+    ui.add_argument("--token", help="require this token (?token=...) to open the page")
+    ui.add_argument("--joystick", nargs="?", const="auto",
+                    help="also accept a controller connected to this machine (default device: first found)")
+    ui.add_argument("--no-cameras", action="store_true")
+    ui.add_argument("--test-camera", action="store_true", help="show a test pattern instead of real cameras")
+    ui.add_argument("--sim-cameras", action="store_true",
+                    help="simulated base and gripper cameras (colour and depth) rendered from the robot model")
+    ui.add_argument("--replay-cameras", metavar="STORE",
+                    help="instead of the cameras, for a computer that has none: 'room' plays pictures of a made-up "
+                         "room as the cameras would see it turning on the spot; FILE.npz plays depth pictures "
+                         "recorded on a robot (and a test pattern for colour)")
+    ui.set_defaults(func=cmd_ui)
+
+    teleop = sub.add_parser("teleop", help="drive with a controller connected to this machine")
+    teleop.add_argument("--joystick", help="device, e.g. /dev/input/js0 (default: first found)")
+    teleop.add_argument("--show", action="store_true", help="print what the controller reports and do nothing else")
+    teleop.set_defaults(func=cmd_teleop)
+
+    rec = sub.add_parser("record", help="log states to an MCAP file")
+    rec.add_argument("output")
+    rec.add_argument("--duration", type=float, help="seconds (default: until interrupted)")
+    rec.add_argument("--decimate", type=int, default=1, help="keep every Nth record")
+    rec.set_defaults(func=cmd_record)
+
+    viz = sub.add_parser("viz", help="live plots in the Rerun viewer")
+    viz.add_argument("--save", help="write a .rrd recording instead of opening a viewer")
+    viz.add_argument("--connect", help="stream to a viewer at this URL")
+    viz.add_argument("--urdf", help="robot model to show (logged once)")
+    viz.add_argument("--duration", type=float, help="seconds (default: until interrupted)")
+    viz.set_defaults(func=cmd_viz)
+
+    from .ui.maptest import LIMITS
+
+    map_test = sub.add_parser(
+        "map-test", help="system test on the real robot: it turns and drives by itself, and its maps are compared",
+        description="Needs the operator page's server running (obot ui) and room for the robot to turn. The robot "
+                    "forgets its map, makes maps of its surroundings turning left and right, drives about a metre "
+                    "and back, and the maps are laid over each other: that gives how far off the odometry's turning "
+                    "is, how far off the time of the pictures, and what driving adds. "
+                    "Exit status 0: passed, 1: failed, 2: could not be made.")
+    map_test.add_argument("--url", default="http://127.0.0.1:8080", help="the page server (default: this machine's)")
+    map_test.add_argument("--turns", type=int, default=3, choices=range(1, 10), metavar="N",
+                          help="turns between the two maps that give the odometry's error (default 3)")
+    map_test.add_argument("--no-drive", action="store_true", help="only turn on the spot, do not drive anywhere")
+    map_test.add_argument("--out", help="directory for the report and a picture of the maps "
+                                        "(default: ~/.local/state/obot/map-test-<time>)")
+    map_test.add_argument("--yes", action="store_true", help="do not ask before moving the robot")
+    for name, (value, text) in LIMITS.items():
+        map_test.add_argument("--" + name.replace("_", "-"), type=float, dest=name, metavar="LIMIT",
+                              help=f"{text} (default {value:g})")
+    map_test.set_defaults(func=cmd_map_test)
+
+    from .ui.cputest import LIMITS as CPU_LIMITS
+
+    cpu_test = sub.add_parser(
+        "cpu-test", help="on the robot: how much of a processor the page server, obot-navd and obot-rtd use",
+        description="To be run on the robot, with the page server running. Measures the processor time of the "
+                    "page server and what belongs to it, and of obot-rtd: with nobody on the page, and with a "
+                    "page open (as a browser has it, without the browser). Moves nothing. "
+                    "Exit status 0: passed, 1: failed, 2: could not be made.")
+    cpu_test.add_argument("--url", default="http://127.0.0.1:8080", help="the page server (default: this machine's)")
+    cpu_test.add_argument("--seconds", type=float, default=15.0, help="how long each of the two is measured")
+    cpu_test.add_argument("--out", help="file for the report (JSON)")
+    for name, (value, text) in CPU_LIMITS.items():
+        cpu_test.add_argument("--" + name.replace("_", "-"), type=float, dest=name, metavar="LIMIT",
+                              help=f"{text} (default {value:g})")
+    cpu_test.set_defaults(func=cmd_cpu_test)
+
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except NotRunning as e:
+        print(f"obot: {e}", file=sys.stderr)
+        return 2
+    except FileNotFoundError as e:
+        print(f"obot: {e}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,18 @@
+[Unit]
+Description=obot operator web page
+Documentation=https://github.com/unhuman-io/obot
+After=obot-rtd.service network.target
+
+[Service]
+Type=simple
+# Set by deploy: the user whose Python environment holds the obot tools.
+User=OBOT_USER
+SupplementaryGroups=obot video input
+EnvironmentFile=-/etc/default/obot-ui
+ExecStart=/home/OBOT_USER/obot-venv/bin/obot --config /etc/obot/robot.toml ui --joystick $OBOT_UI_ARGS
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

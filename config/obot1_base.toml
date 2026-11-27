@@ -1,0 +1,126 @@
+# obot v1 with only its base connected: the two wheel boards on USB (`wl` with an iC-MU,
+# `wr` with an iC-PZ as motor encoder). The arm's joints are left out, so the daemon runs
+# with just these two boards plugged in. See obot1.toml for the whole robot.
+#
+# Everything marked VERIFY is a placeholder.
+
+[robot]
+name = "obot1_base"
+period_us = 1000
+command_timeout_ms = 150
+comm_timeout_cycles = 10
+
+[rt]
+cpu = 3
+priority = 80
+lock_memory = true
+
+[[bus]]
+name = "usb"
+interface = "usbrt"
+
+# --- Base ------------------------------------------------------------------------------
+
+# Signs: every joint has direction 1 (the default, so the key is not written). Which way is
+# positive is settled in each motor controller's firmware (phase order and encoder
+# direction), so that the host never has to know how a motor is mounted: a positive wheel
+# velocity drives the robot forward on both sides.
+#
+# wrap: the wheel firmware keeps its position within plus or minus its encoder rollover (one
+# revolution here) and jumps by twice that, two revolutions, at either end. The daemon
+# counts the turns up again. The value is that jump: 2 * the firmware's `mrollover`.
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "usb"
+usb_name = "wl"
+id = 1
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+continuous = true
+wrap = 12.5663706             # rad: the firmware position runs over +-1 revolution
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[[joint]]
+name = "right_wheel_joint"
+bus = "usb"
+usb_name = "wr"
+id = 2
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+continuous = true
+wrap = 12.5663706             # rad: the firmware position runs over +-1 revolution
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0
+sim = { inertia = 0.3, damping = 0.05, current_limit = 20.0 }
+
+[base]
+left = "left_wheel_joint"
+right = "right_wheel_joint"
+wheel_radius = 0.125          # m, 250 mm tyre
+track_width = 0.3845          # m. Between the tyre centres it is 0.38756 (CAD); turning on the spot the
+                              # base turns 0.8 % more than that gives, measured with the depth camera
+                              # over six turns (three each way, the same both ways).
+v_max = 0.5
+omega_max = 1.5
+
+# --- Operator tools (read by the Python side, ignored by obot-rtd) ----------------------
+
+[[camera]]
+name = "front"
+# The CSI camera on the Jetson Nano, through NVIDIA's camera source and JPEG encoder.
+source = "gst:nvarguscamerasrc ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=15/1 ! nvjpegenc"
+fps = 15
+
+# An Intel RealSense D435. On the Jetson Nano there is no librealsense; the kernel presents
+# the camera as video devices, and realsense: finds the right ones whatever their numbers.
+#
+# xyz and rpy say where the camera is on the base (x forward, y left, z up from the floor
+# between the wheels; rpy[1] > 0 looks down). The 3D view on the operator page places what
+# the depth camera sees with them.
+#
+# The camera faces forward and is level, on its block at the front of the deck. From the
+# CAD model (base_camera_link in obot3.urdf): the centre of its front face is 120 mm ahead
+# of the wheel axis and 18.45 mm above it, so 143 mm above the floor with 125 mm wheels.
+# Within the camera (RealSense D435 data sheet) the depth origin is 17.5 mm to the left of
+# the centre and 4 mm behind the front glass, and the colour sensor 15 mm further left.
+# "Level to floor" on the page measures height and tilt from the floor in view, to check.
+
+[[camera]]
+name = "d435"
+source = "realsense:color"
+width = 640
+height = 480
+fps = 15
+xyz = [0.116, 0.0325, 0.143]
+rpy = [0.0, 0.0, 0.0]
+
+[[camera]]
+name = "d435_depth"
+source = "realsense:depth"
+width = 640
+height = 480
+fps = 15
+xyz = [0.116, 0.0175, 0.143]
+rpy = [0.0, 0.0, 0.0]
+color = "d435"                # colours the 3D points
+
+# What the things around the robot are, said by a network on the GPU: laid over this
+# camera's picture on the page, and kept for the squares of the map from above. Used if the
+# robot has obot-segd and the network (deploy.sh --gpu sees to both); without, it goes without.
+[segmentation]
+model = "/var/lib/obot/models/FCN-ResNet18-SUN-RGBD-512x400/fcn_resnet18.onnx"
+rate = 3.0                    # pictures a second (one takes the GPU 40 ms on a Jetson Nano)
+
+# The map of what the depth cameras have seen. These are the defaults.
+[world]
+voxel = 0.03                  # m: size of a map cell
+range = 3.5                   # m: farther readings are not used
+max_voxels = 250000
+correct_odometry = false      # experimental, see docs/host.md: on this robot the wheels alone do better

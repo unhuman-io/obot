@@ -1,0 +1,195 @@
+name: CI
+# Every push runs CI; a pull request shows the runs of its head commit.
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rt:
+    name: rt ${{ matrix.preset }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, preset: release }
+          - { os: ubuntu-24.04, preset: clang }
+          - { os: ubuntu-24.04, preset: asan }
+          - { os: ubuntu-24.04, preset: tsan }
+          - { os: ubuntu-24.04-arm, preset: release }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build clang libudev-dev
+      - name: Configure
+        working-directory: rt
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        working-directory: rt
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        working-directory: rt
+        run: ctest --preset ${{ matrix.preset }}
+
+  format:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deployment scripts
+        run: |
+          for f in deploy/*.sh deploy/tests/*.sh deploy/rig/*.sh rt/gpu/*.sh; do sh -n "$f"; done
+          sh deploy/tests/test-firmware-update.sh
+      - name: clang-format
+        run: |
+          pipx install clang-format==21.1.8
+          clang-format --version
+          clang-format --dry-run --Werror rt/src/*/*.cpp rt/include/obot/*/*.h rt/apps/*.cpp rt/tests/test_*.cpp rt/gpu/*.cpp
+
+  python:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build the daemon
+        working-directory: rt
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libudev-dev
+          cmake --preset release -DOBOT_RT_BUILD_TESTS=OFF
+          cmake --build --preset release
+      - name: Virtual CAN interfaces
+        # The vcan tests skip themselves if the runner's kernel has no vcan module.
+        run: |
+          sudo apt-get install -y -qq linux-modules-extra-$(uname -r) || true
+          if sudo modprobe vcan; then
+            for i in 0 1 2; do
+              sudo ip link add vcan$i type vcan && sudo ip link set vcan$i mtu 72 && sudo ip link set vcan$i up
+            done
+          fi
+          ip -brief link
+      - name: Install
+        run: pip install -e "python[ui,log,dev]"
+      - name: Browser for the operator page test, Rerun for the plotting test
+        if: matrix.python == '3.13'
+        run: pip install playwright rerun-sdk && playwright install --with-deps chromium-headless-shell
+      - name: Lint
+        run: ruff check python
+      - name: Test
+        working-directory: python
+        env:
+          OBOT_RT_BIN_DIR: ${{ github.workspace }}/rt/build/release
+        run: pytest -v -rs
+
+  static-aarch64:
+    # Statically linked programs for robots that keep their existing OS (the Jetson Nano's
+    # L4T R32 / Ubuntu 18.04 cannot build C++20 itself).
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build
+        working-directory: rt
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build libudev-dev
+          cmake --preset release -DOBOT_RT_STATIC=ON
+          cmake --build --preset release
+          ctest --preset release
+      - name: Package
+        run: |
+          mkdir -p dist/obot-rt-aarch64/bin dist/obot-rt-aarch64/config
+          cp rt/build/release/obot-rtd rt/build/release/obot-sim-node rt/build/release/obot-rt-latency rt/build/release/obot-navd dist/obot-rt-aarch64/bin/
+          cp config/*.toml dist/obot-rt-aarch64/config/
+          cp -r deploy/. dist/obot-rt-aarch64/
+          cp -r description dist/obot-rt-aarch64/
+          file dist/obot-rt-aarch64/bin/obot-rtd
+          tar -C dist -czf obot-rt-aarch64-static.tar.gz obot-rt-aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obot-rt-aarch64-static
+          path: obot-rt-aarch64-static.tar.gz
+
+  rig:
+    # What the software costs in processor time on a real Jetson Nano: obot-rtd on simulated
+    # actuators and the page server with replayed cameras, measured by obot cpu-test.
+    #
+    # This runs on a computer of ours (deploy/rig/setup-runner.sh), so: never for a pull
+    # request (the runner itself refuses anything but pushes and manual runs of this
+    # repository), a read-only token, and no checkout or other JavaScript action (the
+    # runner's Ubuntu 18.04 is too old for the Node they need).
+    needs: static-aarch64
+    if: github.repository == 'unhuman-io/obot' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: obot-rig
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Source and programs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q src
+          git -C src fetch -q --depth 1 "https://github.com/$GITHUB_REPOSITORY" "$GITHUB_SHA"
+          git -C src checkout -q FETCH_HEAD
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=obot-rt-aarch64-static"
+          url="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$api" |
+                 python3 -c 'import json, sys; print(json.load(sys.stdin)["artifacts"][0]["archive_download_url"])')"
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o programs.zip "$url"
+          mkdir programs
+          unzip -q programs.zip -d programs
+          tar -C programs -xzf programs/obot-rt-aarch64-static.tar.gz
+      - name: Processor time
+        # (Measured there: 18 % and 38 %, with the segmentation network running on the GPU.)
+        run: sh src/deploy/rig/cpu-test.sh programs/obot-rt-aarch64/bin --idle-pct 30 --page-pct 55
+
+  os-parse:
+    # Checks that the Yocto layer and its pinned dependencies parse and that every package
+    # of the image resolves. The image itself is built by os-image.yml on a machine with
+    # the disk and time for it.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Host tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gawk wget diffstat unzip texinfo chrpath socat cpio python3-pexpect \
+            xz-utils debianutils iputils-ping python3-git python3-jinja2 python3-subunit zstd lz4 file locales libacl1
+          sudo locale-gen en_US.UTF-8
+          # Ubuntu 24.04 blocks the user namespaces bitbake uses unless AppArmor allows them.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          pipx install kas
+      - name: Parse and resolve the Orin Nano image
+        env:
+          KAS_WORK_DIR: ${{ runner.temp }}/kas
+        run: |
+          mkdir -p "$KAS_WORK_DIR"
+          kas shell os/kas/obot.yml:os/kas/orin-nano.yml -c 'bitbake -p && bitbake -n obot-image | tail -5'
+
+  container:
+    # The Python tools as a container image, for robots whose OS has no recent Python
+    # (the Yocto image, the Jetson Nano's Ubuntu 18.04). Built here to keep it working;
+    # not published.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -f docker/Dockerfile -t obot-tools .
+      - name: Smoke test
+        run: docker run --rm obot-tools obot --help

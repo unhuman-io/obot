@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""A stand-in for obot-segd without a GPU or a network, for the tests: it speaks the same
+way and says of every picture that its left half is class 5 and its right half class 3,
+except where the picture is black (class 0), very sure of the left and not of the right
+column at the edge."""
+import struct
+import sys
+
+WIDTH, HEIGHT, COLUMNS, ROWS, CLASSES = 64, 48, 8, 6, 7
+inp, out = sys.stdin.buffer, sys.stdout.buffer
+
+
+def read(n):
+    data = inp.read(n)
+    if len(data) < n:
+        sys.exit(0)
+    return data
+
+
+while True:
+    size, kind = struct.unpack("<II", read(8))
+    request = read(size - 4)
+    answer, status = b"", 0
+    if kind == 1:
+        length = struct.unpack_from("<I", request)[0]
+        model = request[4:4 + length].decode()
+        if model.endswith("broken.onnx"):
+            status = 1
+        else:
+            answer = struct.pack("<5i", WIDTH, HEIGHT, COLUMNS, ROWS, CLASSES)
+    elif kind == 2 and len(request) == WIDTH * HEIGHT * 3:
+        said, sure = bytearray(), bytearray()
+        for row in range(ROWS):
+            for column in range(COLUMNS):
+                at = ((row * HEIGHT // ROWS + 4) * WIDTH + column * WIDTH // COLUMNS + 4) * 3
+                black = request[at] + request[at + 1] + request[at + 2] == 0
+                said.append(0 if black else 5 if column < COLUMNS // 2 else 3)
+                sure.append(40 if column == COLUMNS - 1 else 230)
+        answer = bytes(said) + bytes(sure) + struct.pack("<f", 1.5)
+    else:
+        status = 1
+    out.write(struct.pack("<II", 4 + len(answer), status) + answer)
+    out.flush()

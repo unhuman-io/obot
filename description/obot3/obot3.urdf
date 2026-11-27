@@ -1,0 +1,536 @@
+<?xml version="1.0"?>
+<!-- obot3, exported from the Fusion model obot3_claude build v32 by tools/urdf_export.py.  Do not edit: regenerate.
+     x forward, y left, z up.  All joints 0 = the pose the CAD model is drawn in (upper arm upright, forearm
+     and tool pointing forward).  Arm joint angles have the sign of the CAD model (tools/pose.py):
+       shoulder_pitch +back / -forward,  elbow_pitch +up,  wrist_pitch +up,  wrist_roll right-handed about x.
+     left_wheel is the robot's own left (+y); the CAD model calls that side R.
+     Masses marked ASSUMED in tools/urdf_export.py are not weighed (battery, hub motors, tyres, caster wheels,
+     gripper allowance).  Cables are not included.  Collision = boxes and cylinders round the big bodies. -->
+<robot name="obot3">
+  <material name="alu"><color rgba="0.784 0.816 0.855 1"/></material>
+  <material name="arm"><color rgba="0.275 0.471 0.784 1"/></material>
+  <material name="mnt"><color rgba="0.235 0.627 0.627 1"/></material>
+  <material name="blk"><color rgba="0.125 0.133 0.149 1"/></material>
+  <material name="pcb"><color rgba="0.098 0.431 0.216 1"/></material>
+  <material name="stl"><color rgba="0.588 0.588 0.608 1"/></material>
+  <material name="mot"><color rgba="0.235 0.243 0.267 1"/></material>
+  <material name="red"><color rgba="0.784 0.157 0.157 1"/></material>
+  <material name="rubber"><color rgba="0.345 0.345 0.361 1"/></material>
+
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/><child link="base_link"/>
+    <origin xyz="0 0 0.125" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-0.0862797 -0.00692385 0.00954855" rpy="0 0 0"/>
+      <mass value="10.4867"/>
+      <inertia ixx="0.156063" ixy="-0.00523133" ixz="0.00339803" iyy="0.121882" iyz="0.00106766" izz="0.233006"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_alu.stl"/></geometry>
+      <material name="alu"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_arm.stl"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_mnt.stl"/></geometry>
+      <material name="mnt"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_mot.stl"/></geometry>
+      <material name="mot"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_pcb.stl"/></geometry>
+      <material name="pcb"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/base_link_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- battery:1 -->
+      <origin xyz="-0.124019 -0.09625 -0.0313661" rpy="0 0 0"/>
+      <geometry><box size="0.169625 0.1155 0.0366322"/></geometry>
+    </collision>
+    <collision>   <!-- battery:1 -->
+      <origin xyz="-0.124513 0.048125 -0.0316" rpy="0 0 0"/>
+      <geometry><box size="0.170173 0.17325 0.0371"/></geometry>
+    </collision>
+    <collision>   <!-- battery:1 -->
+      <origin xyz="-0.120199 0.144375 -0.0288881" rpy="0 0 0"/>
+      <geometry><box size="0.161985 0.01925 0.0316761"/></geometry>
+    </collision>
+    <collision>   <!-- P01_Deck_310x487_x9 -->
+      <origin xyz="-0.322116 0 -0.00855" rpy="0 0 0"/>
+      <geometry><box size="0.0913687 0.0948774 0.009"/></geometry>
+    </collision>
+    <collision>   <!-- P01_Deck_310x487_x9 -->
+      <origin xyz="-0.261203 0 -0.00855" rpy="0 0 0"/>
+      <geometry><box size="0.0304562 0.203656 0.009"/></geometry>
+    </collision>
+    <collision>   <!-- P01_Deck_310x487_x9 -->
+      <origin xyz="-0.0632375 0 -0.00855" rpy="0 0 0"/>
+      <geometry><box size="0.365475 0.309 0.009"/></geometry>
+    </collision>
+    <collision>   <!-- Orin_Heatsink -->
+      <origin xyz="-0.161 -0.101 0.03845" rpy="0 0 0"/>
+      <geometry><box size="0.11 0.102 0.041"/></geometry>
+    </collision>
+    <collision>   <!-- P07_Shoulder_Riser_1.5x4 -->
+      <origin xyz="-0.11 -0.01105 0.07295" rpy="0 0 0"/>
+      <geometry><box size="0.1 0.0381 0.154"/></geometry>
+    </collision>
+    <collision>   <!-- P07_Shoulder_Riser_1.5x4 -->
+      <origin xyz="-0.11 -0.01105 0.15545" rpy="0 0 0"/>
+      <geometry><box size="0.0768522 0.0381 0.011"/></geometry>
+    </collision>
+    <collision>   <!-- P07_Shoulder_Riser_1.5x4 -->
+      <origin xyz="-0.11 -0.01105 0.16645" rpy="0 0 0"/>
+      <geometry><box size="0.0577389 0.0381 0.011"/></geometry>
+    </collision>
+    <collision>   <!-- J1_AK60-39_Body -->
+      <origin xyz="-0.110048 0.02525 0.12695" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.039548" length="0.0425"/></geometry>
+    </collision>
+    <collision>   <!-- Orin_Carrier -->
+      <origin xyz="-0.161 -0.101 0.00895" rpy="0 0 0"/>
+      <geometry><box size="0.11 0.102 0.018"/></geometry>
+    </collision>
+    <collision>   <!-- Orin_Fan -->
+      <origin xyz="-0.161 -0.101 0.065275" rpy="0 0 0"/>
+      <geometry><cylinder radius="0.042" length="0.01265"/></geometry>
+    </collision>
+    <collision>   <!-- shunt:1 -->
+      <origin xyz="-0.2 0.092 0.00695" rpy="0 0 0"/>
+      <geometry><box size="0.025 0.12 0.022"/></geometry>
+    </collision>
+    <collision>   <!-- Intel_RealSense_Depth_Camera_D435:1 -->
+      <origin xyz="0.107475 5.68666e-05 0.0184499" rpy="0 0 0"/>
+      <geometry><box size="0.02505 0.0897899 0.0249999"/></geometry>
+    </collision>
+    <collision>   <!-- P05_Bearing_Cap_2x2x0.5in -->
+      <origin xyz="-0.3228 0 0.0023" rpy="0 0 0"/>
+      <geometry><box size="0.0508 0.0508 0.0127"/></geometry>
+    </collision>
+    <collision>   <!-- battery monitor:1 -->
+      <origin xyz="-0.155 0.1 0.00735" rpy="0 0 0"/>
+      <geometry><box size="0.04 0.08 0.0218"/></geometry>
+    </collision>
+    <collision>   <!-- wheel plate:1 -->
+      <origin xyz="0 -0.135 0.00625" rpy="0 0 0"/>
+      <geometry><box size="0.045 0.04 0.009"/></geometry>
+    </collision>
+    <collision>   <!-- wheel plate:2 -->
+      <origin xyz="0 0.135 0.00625" rpy="0 0 0"/>
+      <geometry><box size="0.045 0.04 0.009"/></geometry>
+    </collision>
+  </link>
+
+  <link name="left_wheel">
+    <inertial>
+      <origin xyz="2.11962e-06 -0.00049825 -6.86158e-08" rpy="0 0 0"/>
+      <mass value="2.64676"/>
+      <inertia ixx="0.00929666" ixy="9.47993e-10" ixz="3.61564e-11" iyy="0.0171599" iyz="3.71986e-09" izz="0.00929666"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/left_wheel_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/left_wheel_mnt.stl"/></geometry>
+      <material name="mnt"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/left_wheel_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- Drive_Tyre_250x60_R -->
+      <origin xyz="-4.94085e-05 -9.31323e-10 7.45058e-09" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.125049" length="0.06"/></geometry>
+    </collision>
+    <collision>   <!-- wheel (1):1 -->
+      <origin xyz="4.86374e-05 -0.00227499 0" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.0885486" length="0.0635"/></geometry>
+    </collision>
+  </link>
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/><child link="left_wheel"/>
+    <origin xyz="0 0.19378 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="right_wheel">
+    <inertial>
+      <origin xyz="-2.11948e-06 0.000498249 -6.8614e-08" rpy="0 0 0"/>
+      <mass value="2.64676"/>
+      <inertia ixx="0.00929666" ixy="9.88526e-10" ixz="-2.04758e-11" iyy="0.0171599" iyz="-3.69393e-09" izz="0.00929666"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/right_wheel_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/right_wheel_mnt.stl"/></geometry>
+      <material name="mnt"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/right_wheel_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- Drive_Tyre_250x60_L -->
+      <origin xyz="-4.94085e-05 9.31323e-10 7.45058e-09" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.125049" length="0.06"/></geometry>
+    </collision>
+    <collision>   <!-- wheel:1 -->
+      <origin xyz="-4.86374e-05 0.00227499 0" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.0885486" length="0.0635"/></geometry>
+    </collision>
+  </link>
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/><child link="right_wheel"/>
+    <origin xyz="0 -0.19378 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="caster_fork">
+    <inertial>
+      <origin xyz="-0.023753 0.00235915 -0.0466717" rpy="0 0 0"/>
+      <mass value="0.386072"/>
+      <inertia ixx="0.000868811" ixy="1.02438e-05" ixz="-0.000124268" iyy="0.000320108" iyz="1.32324e-05" izz="0.000781265"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/caster_fork_arm.stl"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/caster_fork_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- P06_Caster_Blade_0.75in -->
+      <origin xyz="-0.0144816 0 -0.0365784" rpy="0 0 0"/>
+      <geometry><box size="0.0729632 0.01905 0.0811567"/></geometry>
+    </collision>
+    <collision>   <!-- Caster_Axle_Bolt_0.5in_x6.5in -->
+      <origin xyz="-0.035 0.00299999 -0.0612" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.00950001" length="0.16985"/></geometry>
+    </collision>
+  </link>
+  <joint name="caster_swivel_joint" type="continuous">
+    <parent link="base_link"/><child link="caster_fork"/>
+    <origin xyz="-0.3228 0 -0.01305" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+
+  <link name="caster_wheels">
+    <inertial>
+      <origin xyz="-6.11949e-06 4.07861e-11 1.32152e-06" rpy="0 0 0"/>
+      <mass value="1.06"/>
+      <inertia ixx="0.00262912" ixy="5.34065e-09" ixz="-8.49038e-11" iyy="0.00133806" iyz="0" izz="0.00262898"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/caster_wheels_rubber.stl"/></geometry>
+      <material name="rubber"/>
+    </visual>
+    <collision>   <!-- 2829T85_Water-Resistant Rubber Wheel:1 -->
+      <origin xyz="4.8168e-05 -0.040475 -1.86265e-09" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.0508481" length="0.0619125"/></geometry>
+    </collision>
+    <collision>   <!-- 2829T85_Water-Resistant Rubber Wheel:2 -->
+      <origin xyz="4.8168e-05 0.040475 -1.86265e-09" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.0508481" length="0.0619125"/></geometry>
+    </collision>
+  </link>
+  <joint name="caster_wheel_joint" type="continuous">
+    <parent link="caster_fork"/><child link="caster_wheels"/>
+    <origin xyz="-0.035 0 -0.0612" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <link name="upper_arm_link">
+    <inertial>
+      <origin xyz="-0.00350089 0.0276349 0.146024" rpy="0 0 0"/>
+      <mass value="2.0255"/>
+      <inertia ixx="0.0275777" ixy="0.000111821" ixz="-0.000166023" iyy="0.0278829" iyz="0.0021491" izz="0.00210317"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/upper_arm_link_arm.stl"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/upper_arm_link_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/upper_arm_link_mot.stl"/></geometry>
+      <material name="mot"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/upper_arm_link_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- P08_UpperArm_250cc_1.5x4 -->
+      <origin xyz="-0.00364363 0.03755 0.0081163" rpy="0 0 0"/>
+      <geometry><box size="0.0972873 0.0381 0.106233"/></geometry>
+    </collision>
+    <collision>   <!-- P08_UpperArm_250cc_1.5x4 -->
+      <origin xyz="-0.0119953 0.03755 0.135595" rpy="0 0 0"/>
+      <geometry><box size="0.0858342 0.0381 0.148726"/></geometry>
+    </collision>
+    <collision>   <!-- P08_UpperArm_250cc_1.5x4 -->
+      <origin xyz="-0.0025297 0.03755 0.252451" rpy="0 0 0"/>
+      <geometry><box size="0.0949693 0.0381 0.0849861"/></geometry>
+    </collision>
+    <collision>   <!-- J2_AK60-39_Body -->
+      <origin xyz="-4.81103e-05 0.00125 0.25" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.039548" length="0.0425"/></geometry>
+    </collision>
+    <collision>   <!-- P20_Loop_Ring_J1_D4in -->
+      <origin xyz="3.98494e-05 -9.31323e-10 -1.20476e-05" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.0508416" length="0.0364"/></geometry>
+    </collision>
+  </link>
+  <joint name="shoulder_pitch_joint" type="revolute">
+    <parent link="base_link"/><child link="upper_arm_link"/>
+    <origin xyz="-0.11 0.0265 0.12695" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="-1.8326" upper="0.785398" effort="72" velocity="10.26"/>   <!-- J1: -105 .. 45 deg -->
+  </joint>
+
+  <link name="forearm_link">
+    <inertial>
+      <origin xyz="0.108951 -0.0318206 0.00329289" rpy="0 0 0"/>
+      <mass value="1.54879"/>
+      <inertia ixx="0.00147932" ixy="-0.00105975" ixz="4.06059e-06" iyy="0.0175777" iyz="7.5806e-05" izz="0.0171435"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/forearm_link_arm.stl"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/forearm_link_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/forearm_link_mot.stl"/></geometry>
+      <material name="mot"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/forearm_link_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- P09_Forearm_220cc_1.5x4 -->
+      <origin xyz="0.00343506 -0.03755 0.00353387" rpy="0 0 0"/>
+      <geometry><box size="0.0968666 0.0381 0.0970641"/></geometry>
+    </collision>
+    <collision>   <!-- P09_Forearm_220cc_1.5x4 -->
+      <origin xyz="0.109988 -0.0439 0.0150568" rpy="0 0 0"/>
+      <geometry><box size="0.11624 0.0254 0.0797084"/></geometry>
+    </collision>
+    <collision>   <!-- P09_Forearm_220cc_1.5x4 -->
+      <origin xyz="0.216541 -0.03755 0.00353554" rpy="0 0 0"/>
+      <geometry><box size="0.0968666 0.0381 0.0970608"/></geometry>
+    </collision>
+    <collision>   <!-- J3_AK60-6_Body -->
+      <origin xyz="0.219952 -0.00475 0" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.039548" length="0.0275"/></geometry>
+    </collision>
+    <collision>   <!-- P21_Loop_Ring_J2_D4in -->
+      <origin xyz="1.86265e-09 -9.31323e-10 0" rpy="-1.570796 0 0"/>
+      <geometry><cylinder radius="0.0508" length="0.0364"/></geometry>
+    </collision>
+  </link>
+  <joint name="elbow_pitch_joint" type="revolute">
+    <parent link="upper_arm_link"/><child link="forearm_link"/>
+    <origin xyz="0 0 0.25" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="-0.139626" upper="3.28122" effort="72" velocity="10.26"/>   <!-- J2: -8 .. 188 deg -->
+  </joint>
+
+  <link name="wrist_link">
+    <inertial>
+      <origin xyz="0.056857 -0.0167246 0.00622417" rpy="0 0 0"/>
+      <mass value="1.16626"/>
+      <inertia ixx="0.00208643" ixy="0.000735663" ixz="-1.96143e-05" iyy="0.0024912" iyz="0.000148806" izz="0.00257508"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/wrist_link_alu.stl"/></geometry>
+      <material name="alu"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/wrist_link_arm.stl"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/wrist_link_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/wrist_link_mnt.stl"/></geometry>
+      <material name="mnt"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/wrist_link_mot.stl"/></geometry>
+      <material name="mot"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/wrist_link_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- P10A_Wrist_Cheek_16 -->
+      <origin xyz="0.0172 0.0155 0" rpy="0 0 0"/>
+      <geometry><box size="0.1244 0.016 0.09"/></geometry>
+    </collision>
+    <collision>   <!-- J4_AK60-6_Body -->
+      <origin xyz="0.09315 -0.0374519 0" rpy="0 1.570796 0"/>
+      <geometry><cylinder radius="0.039548" length="0.0275"/></geometry>
+    </collision>
+    <collision>   <!-- P10B_Roll_Housing_D90x1in -->
+      <origin xyz="0.0667 -0.0375 2.42703e-06" rpy="0 0 0"/>
+      <geometry><box size="0.0254 0.0899999 0.0899951"/></geometry>
+    </collision>
+    <collision>   <!-- Intel_RealSense_Depth_Camera_D435:2 -->
+      <origin xyz="0.059375 -0.0374431 0.0638499" rpy="0 0 0"/>
+      <geometry><box size="0.02505 0.0897899 0.0249998"/></geometry>
+    </collision>
+  </link>
+  <joint name="wrist_pitch_joint" type="revolute">
+    <parent link="forearm_link"/><child link="wrist_link"/>
+    <origin xyz="0.22 0 0" rpy="0 0 0"/>
+    <axis xyz="0 -1 0"/>
+    <limit lower="-1.71042" upper="1.48353" effort="9" velocity="33.51"/>   <!-- J3: -98 .. 85 deg -->
+  </joint>
+
+  <link name="tool_link">
+    <inertial>
+      <origin xyz="0.0227426 -0.000208084 0.00308841" rpy="0 0 0"/>
+      <mass value="0.51022"/>
+      <inertia ixx="0.000688913" ixy="-1.60571e-06" ixz="-9.74219e-06" iyy="0.000437226" iyz="-3.21827e-07" izz="0.000382256"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/tool_link_arm.stl"/></geometry>
+      <material name="arm"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/tool_link_mnt.stl"/></geometry>
+      <material name="mnt"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/tool_link_stl.stl"/></geometry>
+      <material name="stl"/>
+    </visual>
+    <collision>   <!-- P11_Tool_Cup_D90x1in -->
+      <origin xyz="0.0257 -2.97502e-05 0" rpy="0 0 0"/>
+      <geometry><box size="0.0254 0.0951905 0.09525"/></geometry>
+    </collision>
+    <collision>   <!-- P23_Loop_Ring_J4_D4in -->
+      <origin xyz="0.00314999 -2.69599e-05 0" rpy="0 1.570796 0"/>
+      <geometry><cylinder radius="0.0508269" length="0.0317"/></geometry>
+    </collision>
+  </link>
+  <joint name="wrist_roll_joint" type="revolute">
+    <parent link="wrist_link"/><child link="tool_link"/>
+    <origin xyz="0.0924 -0.0375 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="-2.87979" upper="2.87979" effort="9" velocity="33.51"/>   <!-- J4: -165 .. 165 deg -->
+  </joint>
+
+  <link name="gripper_link">
+    <inertial>
+      <origin xyz="0.0297568 0 0" rpy="0 0 0"/>
+      <mass value="0.35"/>
+      <inertia ixx="0.000268594" ixy="0" ixz="0" iyy="0.000267071" iyz="0" izz="0.000411367"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper_link_alu.stl"/></geometry>
+      <material name="alu"/>
+    </visual>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><mesh filename="meshes/gripper_link_blk.stl"/></geometry>
+      <material name="blk"/>
+    </visual>
+    <collision>   <!-- Gripper_TBD_Palm -->
+      <origin xyz="0.019 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.038 0.08 0.05"/></geometry>
+    </collision>
+    <collision>   <!-- Gripper_TBD_Finger_L -->
+      <origin xyz="0.069 -0.028 0" rpy="0 0 0"/>
+      <geometry><box size="0.062 0.012 0.028"/></geometry>
+    </collision>
+    <collision>   <!-- Gripper_TBD_Finger_R -->
+      <origin xyz="0.069 0.028 0" rpy="0 0 0"/>
+      <geometry><box size="0.062 0.012 0.028"/></geometry>
+    </collision>
+  </link>
+  <joint name="gripper_fixed_joint" type="fixed">
+    <parent link="tool_link"/><child link="gripper_link"/>
+    <origin xyz="0.0384 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="flange"/>   <!-- tool mounting face, on the roll axis, x out of the face -->
+  <joint name="flange_joint" type="fixed">
+    <parent link="tool_link"/><child link="flange"/>
+    <origin xyz="0.0384 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="tool0"/>   <!-- the same point, z out of the face -->
+  <joint name="tool0_joint" type="fixed">
+    <parent link="flange"/><child link="tool0"/>
+    <origin xyz="0 0 0" rpy="0 1.570796 0"/>
+  </joint>
+
+  <link name="base_camera_link"/>   <!-- D435: centre of its front face, x = viewing direction (not the RealSense optical origin) -->
+  <joint name="base_camera_link_joint" type="fixed">
+    <parent link="base_link"/><child link="base_camera_link"/>
+    <origin xyz="0.12 4.5e-05 0.01845" rpy="0 0 0"/>
+  </joint>
+
+  <link name="wrist_camera_link"/>   <!-- D435 on the roll housing: centre of its front face, x = viewing direction -->
+  <joint name="wrist_camera_link_joint" type="fixed">
+    <parent link="wrist_link"/><child link="wrist_camera_link"/>
+    <origin xyz="0.0719 -0.037455 0.06385" rpy="0 0 0"/>
+  </joint>
+</robot>

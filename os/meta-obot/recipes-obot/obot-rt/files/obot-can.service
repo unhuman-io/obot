@@ -1,0 +1,12 @@
+[Unit]
+Description=Configure the CAN interfaces named in /etc/obot/robot.toml
+After=network-pre.target systemd-modules-load.service
+ConditionPathExists=/etc/obot/robot.toml
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/obot/obot-can-setup /etc/obot/robot.toml
+
+[Install]
+WantedBy=multi-user.target

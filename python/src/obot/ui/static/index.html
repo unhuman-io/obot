@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>obot operator</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1a1d21; --muted: #667080; --line: #d9dde3;
+    --ok: #1f8a4c; --warn: #b26a00; --bad: #c62828; --accent: #2456c9; --bar: #c9d6f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --panel: #1e2126; --ink: #e8eaed; --muted: #98a1ad; --line: #343941;
+            --ok: #4cc27f; --warn: #e0a040; --bad: #ef6b6b; --accent: #7ea2ff; --bar: #33415f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0; }
+  .pill { padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); font-weight: 600; }
+  .pill.active { color: var(--ok); border-color: var(--ok); }
+  button.active { color: var(--ok); border-color: var(--ok); }
+  .pill.idle, .pill.init { color: var(--muted); }
+  .pill.fault, .pill.estop { color: var(--bad); border-color: var(--bad); }
+  .spacer { flex: 1; }
+  button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.stop { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 700; }
+  main { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 12px; padding: 12px 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  section h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+  .cameras { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px; }
+  figure { margin: 0; position: relative; }
+  /* what the segmentation network says, laid over the camera's picture: one square for each part of it */
+  figure canvas.labels { position: absolute; left: 0; top: 0; width: 100%; aspect-ratio: 4 / 3; opacity: 0.45;
+                         image-rendering: pixelated; pointer-events: none; border-radius: 6px; }
+  .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin: 0 0.3em 0 0.8em; vertical-align: -0.05em; }
+  figure img { width: 100%; display: block; background: #000; border-radius: 6px; aspect-ratio: 4 / 3; object-fit: contain; }
+  figcaption { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .side { display: grid; gap: 12px; align-content: start; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding: 3px 4px; text-align: right; white-space: nowrap; }
+  td:first-child, th:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr.selected td:first-child { color: var(--accent); font-weight: 600; }
+  .range { position: relative; height: 8px; min-width: 70px; background: var(--bar); border-radius: 4px; }
+  .range i { position: absolute; top: -2px; width: 4px; height: 12px; margin-left: -2px; background: var(--accent); border-radius: 2px; }
+  .bad { color: var(--bad); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; }
+  dt { color: var(--muted); } dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; color: var(--muted); font-size: 13px; }
+  .keys b { color: var(--ink); font-weight: 600; }
+  #model { width: 100%; height: 360px; }
+  #model.world { height: 460px; }
+  h2 .tools { float: right; text-transform: none; letter-spacing: 0; }
+  h2 .tools button { padding: 1px 8px; font-size: 12px; margin-left: 4px; }
+  h2 .tools label { font-size: 12px; font-weight: 400; margin-left: 2px; }
+  h2 .tools input { font: inherit; padding: 0 2px; }
+  #world-note { margin: 6px 0 0; font-size: 12px; }
+  #plan { display: block; width: 100%; height: 360px; border-radius: 6px; background: var(--bg); }
+  #plan { touch-action: none; cursor: grab; }
+  #plan.armed { cursor: crosshair; }
+  .simcam { width: 100%; aspect-ratio: 4 / 3; background: #000; border-radius: 6px; overflow: hidden; }
+  .simcam canvas { display: block; width: 100%; height: 100%; }
+  #model canvas { display: block; border-radius: 6px; }
+  #banner { display: none; padding: 8px 16px; background: var(--bad); color: #fff; }
+  #plots { position: relative; }
+  .plot-controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; margin-bottom: 8px; font-size: 13px; }
+  .plot-controls select, .plot-controls button { font: inherit; padding: 2px 8px; border-radius: 6px;
+                                                 border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .plot-picker { position: relative; }
+  .plot-picker summary { cursor: pointer; padding: 2px 10px; border: 1px solid var(--line); border-radius: 6px; list-style: none; }
+  .plot-picker summary::after { content: " ▾"; color: var(--muted); }
+  .plot-picker-list { position: absolute; z-index: 5; top: 100%; left: 0; margin-top: 4px; padding: 8px; width: max-content;
+                      max-width: min(90vw, 560px); max-height: 420px; overflow: auto; background: var(--panel);
+                      border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .18);
+                      display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 10px; }
+  .plot-picker-list fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  .plot-picker-list legend { color: var(--muted); font-size: 12px; padding: 0; margin-bottom: 2px; }
+  .plot-picker-list label { display: block; white-space: nowrap; }
+  .plot-panel { margin-top: 8px; }
+  .plot-legend { display: flex; flex-wrap: wrap; gap: 2px 16px; font-size: 12px; color: var(--muted); margin-left: 56px; }
+  .plot-legend b, .plot-tip b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .plot-key i, .plot-tip i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; }
+  .plot-canvas { display: block; width: 100%; height: 170px; cursor: crosshair; }
+  .plot-tip { display: none; position: absolute; z-index: 4; pointer-events: none; padding: 6px 8px; font-size: 12px;
+              background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, .18);
+              white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="banner"></div>
+<header>
+  <h1 id="robot">obot</h1>
+  <span id="mode" class="pill init">connecting</span>
+  <span id="faults" class="bad"></span>
+  <span id="warnings" class="warn"></span>
+  <span class="spacer"></span>
+  <span id="operator" class="muted"></span>
+  <button data-request="enable">Enable</button>
+  <button data-request="disable">Disable</button>
+  <button data-request="clear_faults">Clear faults</button>
+  <button class="stop" data-request="estop">STOP</button>
+</header>
+<main>
+  <div class="side">
+  <section>
+    <h2>Cameras</h2>
+    <div id="cameras" class="cameras"><p class="muted">No cameras configured.</p></div>
+  </section>
+  <section id="model-section" style="display:none">
+    <h2><span id="model-title">Robot</span>
+      <span id="world-tools" class="tools" style="display:none">
+        <button id="world-colour" title="Colour the map by what the camera saw, or by height above the floor">Colour: camera</button>
+        <button id="world-level" title="Point the depth camera so that the floor fills a good part of its picture: its height and tilt are then worked out from the floor">Level to floor</button>
+        <button id="world-clear" title="Forget what was seen and start the map again">Clear map</button>
+        <button id="nav-goto" title="Then click a place on the floor in the view below: the robot drives there by itself, around what is in the map, and stops for what its camera sees in the way. Touching the controller, or Stop, ends it.">Drive to a click</button>
+        <button id="nav-look" title="Turn once on the spot, so that the camera has seen all around">Look around</button>
+        <button id="nav-explore" title="Map by itself: the robot looks around, drives to the nearest edge of what it has seen, looks around there, and so on, until there is no edge left that it can reach. It stays within the distance given of where it starts. Touching the controller, or Stop, ends it.">Map by itself</button>
+        <label class="muted" title="How far from where it starts the robot may go while mapping by itself">within <input id="nav-radius" type="number" min="1" max="15" step="0.5" value="4" style="width:3.6em"> m</label>
+        <button id="nav-stop" title="Stop driving to the point">Stop</button>
+      </span></h2>
+    <div id="model"></div>
+    <p id="world-note" class="muted"></p>
+  </section>
+  <section id="plan-section" style="display:none">
+    <h2>Map from above</h2>
+    <p id="plan-labels" class="muted" style="display:none"></p>
+    <canvas id="plan" title="Dark: something stands there (lighter: remembered to, and not in the 3D map now). Light: floor seen to be free. Shaded: free, but too close to something for the middle of the robot. Nothing: not seen yet. Wheel or two fingers: zoom. Drag: move. Double click: the whole map. With Drive to a click on, a click here sets where to go."></canvas>
+  </section>
+  <section>
+    <h2>Plots</h2>
+    <div id="plots"><p class="muted">Waiting for the robot.</p></div>
+  </section>
+  </div>
+  <div class="side">
+    <section>
+      <h2>Controller</h2>
+      <p id="pad" class="muted">No controller. Connect one and press any button, or use the keyboard.</p>
+      <div class="keys">
+        <b>hold LB</b><span>deadman: nothing moves without it</span>
+        <b>left stick</b><span>drive and turn; RT goes faster</span>
+        <b>right stick, D-pad</b><span>move the selected arm joints; RB selects the next group</span>
+        <b>Start / B</b><span>enable / disable</span>
+        <b>Back / Y</b><span>clear faults / emergency stop</span>
+        <b>X</b><span>Cartesian mode: right stick forward / back and roll, D-pad up / down and pitch</span>
+        <b>keyboard</b><span>hold Shift as the deadman; W A S D drive, arrow keys move the arm, Space stops</span>
+      </div>
+    </section>
+    <section>
+      <h2>Joints</h2>
+      <table id="joints"><thead><tr><th>joint</th><th>rad</th><th>N m</th><th>&deg;C</th><th>range</th></tr></thead><tbody></tbody></table>
+    </section>
+    <section>
+      <h2>Robot</h2>
+      <dl>
+        <dt>base</dt><dd id="base">-</dd>
+        <dt>odometry</dt><dd id="odom">-</dd>
+        <dt>bus voltage</dt><dd id="voltage">-</dd>
+        <dt>control loop</dt><dd id="loop">-</dd>
+        <dt>command age</dt><dd id="age">-</dd>
+      </dl>
+    </section>
+  </div>
+</main>
+<script type="importmap">{ "imports": { "three": "/static/vendor/three.module.min.js" } }</script>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const query = location.search;   // carries ?token=... to the WebSocket and the camera streams
+
+// A depth camera's picture comes grey, nearest brightest: colouring it is cheap here and was
+// a tenth of a processor on the robot. The colours come with the page's info; they are made
+// into a filter that replaces each grey by its colour.
+function depthColours() {
+  if (!document.getElementById("depth-colours") && (info.depth_colours || []).length === 256) {
+    const channel = (k) => info.depth_colours.map((c) => (c[k] / 255).toFixed(3)).join(" ");
+    const holder = document.createElement("div");
+    holder.innerHTML = `<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <filter id="depth-colours" color-interpolation-filters="sRGB"><feComponentTransfer>
+        <feFuncR type="table" tableValues="${channel(0)}"/><feFuncG type="table" tableValues="${channel(1)}"/>
+        <feFuncB type="table" tableValues="${channel(2)}"/></feComponentTransfer></filter></svg>`;
+    document.body.append(holder.firstElementChild);
+  }
+  return "url(#depth-colours)";
+}
+let info = { joints: [], arm_joints: [], q_min: [], q_max: [], continuous: [], cameras: [] };
+let ws = null;
+let wsOpenSince = 0;
+
+function text(id, value) { const el = $(id); if (el.textContent !== value) el.textContent = value; }
+function fmt(x, digits = 2) { return x === null || x === undefined ? "-" : x.toFixed(digits); }
+
+function showInfo(next) {
+  info = next;
+  text("robot", info.robot || "obot");
+  if ((info.model || info.world) && !window.obotModelRequested) {
+    window.obotModelRequested = true;
+    $("model-section").style.display = "";
+    if (info.world) {
+      $("model").className = "world";
+      $("world-tools").style.display = "";
+      text("model-title", "Robot and what it has seen");
+    }
+    import("/static/model.js").then((m) => m.show($("model"), query, simCameras, { model: info.model, world: info.world }))
+      .then((view) => { window.obotModel = view; })
+      .catch((e) => { $("model").textContent = "3D view unavailable: " + e; });
+  }
+  if (window.obotPlots) window.obotPlots.setCatalogue(info.plot_signals || [], info.plot_rates || []);
+  const cams = $("cameras");
+  const simCameras = info.sim_cameras || [];
+  if (info.cameras.length || simCameras.length) {
+    cams.replaceChildren(...simCameras.map((cam) => {
+      const figure = document.createElement("figure");
+      cam.element = document.createElement("div");
+      cam.element.className = "simcam";
+      const caption = document.createElement("figcaption");
+      caption.textContent = cam.name + " (simulated)";
+      figure.append(cam.element, caption);
+      return figure;
+    }), ...info.cameras.map((name) => {
+      const figure = document.createElement("figure");
+      const img = document.createElement("img");
+      img.alt = name + " camera";
+      img.src = "/camera/" + encodeURIComponent(name) + ".mjpg" + query;
+      if ((info.depth_cameras || []).includes(name)) img.style.filter = depthColours();
+      const caption = document.createElement("figcaption");
+      caption.id = "cam-" + name;
+      caption.textContent = name;
+      figure.append(img, caption);
+      return figure;
+    }));
+  }
+  const body = $("joints").tBodies[0];
+  body.replaceChildren(...info.joints.map((name, i) => {
+    const row = body.insertRow();
+    row.id = "joint-" + i;
+    for (let c = 0; c < 4; c++) row.insertCell();
+    const range = row.insertCell();
+    if (!info.continuous[i]) range.innerHTML = '<div class="range"><i></i></div>';
+    row.cells[0].textContent = name;
+    return row;
+  }));
+}
+
+// Where the wheels say the robot is, moved to where the cameras found it in the map
+// (world.correction: the pose of the wheels' frame in the map's).
+let odomCorrection = [0, 0, 0];
+function inMap(odom) {
+  const c = Math.cos(odomCorrection[2]), sn = Math.sin(odomCorrection[2]);
+  return [odomCorrection[0] + c * odom[0] - sn * odom[1], odomCorrection[1] + sn * odom[0] + c * odom[1],
+          odom[2] + odomCorrection[2]];
+}
+
+function showState(s) {
+  if (s.world && s.world.correction) odomCorrection = s.world.correction;
+  if (window.obotModel && s.q) window.obotModel.setJoints(info.joints, s.q, s.odom ? inMap(s.odom) : s.odom);
+  if (window.obotModel && window.obotModel.world && s.world) {
+    window.obotModel.world.setCameras(s.world.cameras);
+    const leveled = Object.entries(s.world.leveled || {}).map(([name, r]) => name + ": " + (r.error ? r.error :
+      "xyz = [" + r.xyz.join(", ") + "], rpy = [" + r.rpy.join(", ") + "] (put these in the configuration to keep them)"));
+    const m = s.world.match || {};
+    const seen = !("scan" in m) ? "" : m.used ? "cameras agree with the map (" + Math.round(m.share * 100) + " % of the view)" :
+      m.share === undefined ? "cameras: nothing known in view" : "cameras: view not matched";
+    text("world-note", [navNote(), s.world.note, s.world.voxels.toLocaleString() + " map cells, " + fmt(s.world.update_ms, 0) + " ms per update", seen,
+                        s.world.error ? "error: " + s.world.error : "", ...leveled].filter(Boolean).join(" · "));
+  }
+  if (s.nav !== undefined) showNav(s.nav);
+  if (s.odom) { plan.pose = inMap(s.odom); drawPlan(); }
+  if (s.status) {
+    text("operator", (s.status.cartesian ? "Cartesian mode  " : "") +
+         (s.status.operator ? "operator: " + s.status.operator + (s.status.moving ? " (moving)" : "") : ""));
+    const banner = $("banner");
+    const problem = s.status.robot !== "connected" ? "Robot daemon: " + s.status.robot : "";
+    banner.style.display = problem ? "block" : "none";
+    banner.textContent = problem;
+    if (problem) { const m = $("mode"); m.textContent = "no robot"; m.className = "pill init"; }
+  }
+  if (!s.mode) return;
+  const mode = $("mode");
+  mode.textContent = s.mode;
+  mode.className = "pill " + s.mode;
+  text("faults", s.faults.join(", "));
+  text("warnings", s.warnings.join(", "));
+  const group = s.status ? s.status.group : 0;
+  const selected = info.arm_joints.slice(group * 4, group * 4 + 4);
+  s.q.forEach((q, i) => {
+    const row = $("joint-" + i);
+    if (!row) return;
+    row.className = selected.includes(i) ? "selected" : "";
+    const j = s.joints[i];
+    row.cells[0].textContent = j.name + (j.faults.length ? "  " + j.faults.join(", ") : "");
+    row.cells[0].classList.toggle("bad", j.faults.length > 0);
+    row.cells[1].textContent = fmt(q, 3);
+    row.cells[2].textContent = fmt(s.tau[i], 1);
+    row.cells[3].textContent = fmt(s.temperature[i], 0);
+    const marker = row.querySelector(".range i");
+    if (marker && q !== null) {
+      const span = info.q_max[i] - info.q_min[i];
+      marker.style.left = Math.max(0, Math.min(100, (q - info.q_min[i]) / span * 100)) + "%";
+    }
+  });
+  text("base", fmt(s.base_v) + " m/s, " + fmt(s.base_omega) + " rad/s");
+  const where = inMap(s.odom), shift = Math.hypot(odomCorrection[0], odomCorrection[1]);
+  text("odom", "x " + fmt(where[0]) + "  y " + fmt(where[1]) + "  yaw " + fmt(where[2] * 180 / Math.PI, 0) + "°" +
+    (shift > 0.005 || Math.abs(odomCorrection[2]) > 0.002 ? "  (wheels corrected by " + fmt(shift) + " m, " +
+      fmt(odomCorrection[2] * 180 / Math.PI, 1) + "°)" : ""));
+  const volts = s.bus_voltage.filter((v) => v !== null);
+  text("voltage", volts.length ? fmt(Math.min(...volts), 1) + " V" : "-");
+  text("loop", "late " + fmt(s.wake_latency_us, 0) + " µs, cycle " + fmt(s.exec_us, 0) + " µs, overruns " + s.overruns);
+  text("age", s.command_age_ms === null ? "no command yet" : fmt(s.command_age_ms, 0) + " ms");
+  for (const [name, cam] of Object.entries(s.cameras || {})) {
+    const caption = $("cam-" + name);
+    if (caption) caption.textContent = name + (cam.error ? ": " + cam.error : cam.fps ? " · " + fmt(cam.fps, 0) + " fps" : "");
+  }
+}
+
+function connect() {
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws" + query);
+  ws.onopen = () => { wsOpenSince = Date.now(); if (window.obotPlots) window.obotPlots.resubscribe(); };
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "info") showInfo(message);
+    else if (message.type === "state") showState(message);
+    else if (message.type === "plot" && window.obotPlots) window.obotPlots.addBatch(message);
+  };
+  ws.onclose = () => {
+    $("banner").style.display = "block";
+    $("banner").textContent = "Connection to the robot lost. Reconnecting...";
+    setTimeout(connect, 1000);
+  };
+}
+
+function send(message) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+document.querySelectorAll("button[data-request]").forEach((button) => {
+  button.addEventListener("click", () => send({ type: "request", request: button.dataset.request }));
+});
+
+// --- driving to a place clicked on the floor --------------------------------------------------
+let navArmed = false, navLast = null;
+function showNav(nav) {
+  navLast = nav;
+  if (window.obotModel && window.obotModel.setNav) window.obotModel.setNav(nav);
+  $("nav-stop").disabled = !nav || !(nav.exploring || ["planning", "driving", "looking"].includes(nav.state));
+  $("nav-explore").classList.toggle("active", !!(nav && nav.exploring));
+}
+function navNote() {
+  if (navArmed) return "click a place on the floor to drive there";
+  if (!navLast || navLast.state === "idle") return navLast && navLast.note ? navLast.note : "";
+  const what = { planning: "finding a way", driving: "driving there", looking: "looking around", arrived: "arrived",
+                 failed: "did not get there" }[navLast.state] || navLast.state;
+  if (navLast.exploring) return "mapping by itself: " + (navLast.note.replace(/^mapping: /, "") || what);
+  if (navLast.state === "arrived" && navLast.note) return navLast.note;
+  return what + (navLast.note ? ": " + navLast.note : "");
+}
+function armNav(on) {
+  navArmed = on;
+  $("nav-goto").classList.toggle("active", on);
+  $("plan").classList.toggle("armed", on);
+  if (window.obotModel && window.obotModel.onFloorClick) {
+    window.obotModel.onFloorClick(on ? (x, y) => { send({ type: "nav", action: "goto", x, y }); armNav(false); } : null);
+  }
+}
+$("nav-goto").addEventListener("click", () => armNav(!navArmed));
+
+// --- the map from above --------------------------------------------------------------------
+// Fetched once a second (see WorldView.grid for the layout); the robot, its way and where it
+// is going are drawn over it with every state.
+// zoom: 1 shows the whole map; centre: the map square in the middle of the view (null: the map's middle)
+const plan = { grid: null, picture: document.createElement("canvas"), pose: null, view: null, busy: false,
+               zoom: 1, centre: null };
+window.obotPlan = plan;
+async function pollPlan() {
+  if (plan.busy || document.hidden) return;
+  plan.busy = true;
+  try {
+    const response = await fetch("/api/grid" + location.search);
+    if (!response.ok) return;
+    const buffer = await response.arrayBuffer(), head = new DataView(buffer);
+    if (head.getUint32(0, true) !== 0x3147424F) return;
+    const grid = { i0: head.getInt32(4, true), j0: head.getInt32(8, true), width: head.getUint32(12, true),
+                   height: head.getUint32(16, true), cell: head.getFloat32(20, true) };
+    $("plan-section").style.display = "";
+    if (!grid.width || !grid.height) return;
+    const cells = new Uint8Array(buffer, 24), style = getComputedStyle(document.documentElement);
+    const shade = (name, alpha) => {
+      const probe = document.createElement("canvas").getContext("2d");
+      probe.fillStyle = style.getPropertyValue(name).trim() || "#888";
+      probe.fillRect(0, 0, 1, 1);
+      const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+      return [r, g, b, alpha];
+    };
+    // not seen, free floor, something there, free but too close, something remembered to be there
+    const colours = [[0, 0, 0, 0], shade("--panel", 255), shade("--ink", 235), shade("--muted", 70), shade("--ink", 130)];
+    plan.picture.width = grid.width;
+    plan.picture.height = grid.height;
+    const context = plan.picture.getContext("2d"), image = context.createImageData(grid.width, grid.height);
+    for (let j = 0; j < grid.height; j++) {
+      const row = (grid.height - 1 - j) * grid.width * 4;      // y up on the page
+      for (let i = 0; i < grid.width; i++) image.data.set(colours[cells[j * grid.width + i]] || colours[0], row + i * 4);
+    }
+    context.putImageData(image, 0, 0);
+    plan.grid = grid;
+    if (window.obotModel && window.obotModel.world) window.obotModel.world.setFloorPlan(plan.picture, grid);
+    drawPlan();
+  } catch (e) { /* the next second will do */ } finally { plan.busy = false; }
+}
+function drawPlan() {
+  const canvas = $("plan"), grid = plan.grid;
+  if (!grid || !canvas.clientWidth) return;
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * ratio;
+  canvas.height = canvas.clientHeight * ratio;
+  const context = canvas.getContext("2d");
+  const scale = Math.min(canvas.width / grid.width, canvas.height / grid.height) * plan.zoom;
+  // (the centre is in squares counted from the map's origin, so it stays put when the map grows)
+  const centre = plan.centre || [grid.i0 + grid.width / 2, grid.j0 + grid.height / 2];
+  const left = canvas.width / 2 - (centre[0] - grid.i0) * scale;
+  const top = canvas.height / 2 - (grid.height - (centre[1] - grid.j0)) * scale;
+  // metres on the map <-> pixels of the canvas
+  const px = (x, y) => [left + (x / grid.cell - grid.i0) * scale, top + (grid.height - (y / grid.cell - grid.j0)) * scale];
+  plan.view = { scale, left, top, ratio, centre };
+  context.imageSmoothingEnabled = false;
+  context.drawImage(plan.picture, left, top, grid.width * scale, grid.height * scale);
+  if (labels && labels.squares.length) {      // what the network says the things are, in its colours
+    context.globalAlpha = 0.85;
+    for (const [i, j, kind] of labels.squares) {
+      context.fillStyle = "rgb(" + (labels.colours[kind] || [128, 128, 128]).join(",") + ")";
+      context.fillRect(left + (i - grid.i0) * scale, top + (grid.height - 1 - (j - grid.j0)) * scale,
+                       Math.ceil(scale), Math.ceil(scale));
+    }
+    context.globalAlpha = 1;
+  }
+  const style = getComputedStyle(document.documentElement);
+  const ok = style.getPropertyValue("--ok").trim() || "#2f9e44", accent = style.getPropertyValue("--accent").trim() || "#36c";
+  if (navLast && navLast.goal && ["planning", "driving", "looking"].includes(navLast.state)) {
+    context.strokeStyle = ok;
+    context.lineWidth = 2 * ratio;
+    context.beginPath();
+    if (plan.pose) context.moveTo(...px(plan.pose[0], plan.pose[1]));
+    for (const [x, y] of navLast.path) context.lineTo(...px(x, y));
+    context.stroke();
+    context.beginPath();
+    context.arc(...px(navLast.goal[0], navLast.goal[1]), 6 * ratio, 0, 2 * Math.PI);
+    context.stroke();
+  }
+  if (plan.pose) {
+    // the robot: its footprint to scale (0.45 m wide, the wheel axis 0.16 m behind the front), nose forward
+    const [x, y, yaw] = plan.pose, c = Math.cos(yaw), s = Math.sin(yaw);
+    const corner = (fx, fy) => px(x + c * fx - s * fy, y + s * fx + c * fy);
+    context.fillStyle = accent;
+    context.beginPath();
+    [[0.22, 0], [0.10, 0.22], [-0.34, 0.22], [-0.34, -0.22], [0.10, -0.22]].forEach(([fx, fy], k) => {
+      const [u, v] = corner(fx, fy);
+      if (k) context.lineTo(u, v); else context.moveTo(u, v);
+    });
+    context.closePath();
+    context.fill();
+  }
+}
+// Zoom with the wheel (or two fingers) about where the pointer is, drag to move, double click
+// for the whole map again. A click without dragging, with "Drive to a click" on, sets the goal.
+function planSquare(clientX, clientY) {      // which map square (not whole) a place on the page is
+  const box = $("plan").getBoundingClientRect(), { scale, left, top, ratio } = plan.view, grid = plan.grid;
+  return [((clientX - box.left) * ratio - left) / scale + grid.i0,
+          grid.height - ((clientY - box.top) * ratio - top) / scale + grid.j0];
+}
+function planZoom(factor, clientX, clientY) {
+  if (!plan.grid || !plan.view) return;
+  const under = planSquare(clientX, clientY), before = plan.zoom;
+  plan.zoom = Math.max(1, Math.min(40, plan.zoom * factor));
+  const k = before / plan.zoom, c = plan.view.centre;        // what was under the pointer stays there
+  plan.centre = plan.zoom === 1 ? null : [under[0] + (c[0] - under[0]) * k, under[1] + (c[1] - under[1]) * k];
+  drawPlan();
+}
+const planTouch = new Map();
+let planDrag = null;
+$("plan").addEventListener("wheel", (e) => {
+  e.preventDefault();
+  planZoom(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+}, { passive: false });
+$("plan").addEventListener("pointerdown", (e) => {
+  $("plan").setPointerCapture(e.pointerId);
+  planTouch.set(e.pointerId, [e.clientX, e.clientY]);
+  planDrag = { from: [e.clientX, e.clientY], moved: 0 };
+});
+$("plan").addEventListener("pointermove", (e) => {
+  const last = planTouch.get(e.pointerId);
+  if (!last || !plan.view) return;
+  if (planTouch.size === 2) {                                // two fingers: their distance is the zoom
+    const [other] = [...planTouch].filter(([id]) => id !== e.pointerId).map(([, p]) => p);
+    const was = Math.hypot(last[0] - other[0], last[1] - other[1]);
+    const now = Math.hypot(e.clientX - other[0], e.clientY - other[1]);
+    if (was > 1) planZoom(now / was, (e.clientX + other[0]) / 2, (e.clientY + other[1]) / 2);
+  } else if (planDrag) {
+    planDrag.moved += Math.hypot(e.clientX - last[0], e.clientY - last[1]);
+    if (planDrag.moved > 4 && plan.zoom > 1) {
+      const per = plan.view.ratio / plan.view.scale, c = plan.view.centre;
+      plan.centre = [c[0] - (e.clientX - last[0]) * per, c[1] + (e.clientY - last[1]) * per];
+      drawPlan();
+    }
+  }
+  planTouch.set(e.pointerId, [e.clientX, e.clientY]);
+});
+const planRelease = (e) => {
+  const click = planTouch.size === 1 && planDrag && planDrag.moved <= 4 && e.type === "pointerup";
+  planTouch.delete(e.pointerId);
+  planDrag = null;
+  if (!click || !navArmed || !plan.grid || !plan.view) return;
+  const [i, j] = planSquare(e.clientX, e.clientY);
+  send({ type: "nav", action: "goto", x: i * plan.grid.cell, y: j * plan.grid.cell });
+  armNav(false);
+};
+$("plan").addEventListener("pointerup", planRelease);
+$("plan").addEventListener("pointercancel", planRelease);
+$("plan").addEventListener("dblclick", () => { plan.zoom = 1; plan.centre = null; drawPlan(); });
+setInterval(pollPlan, 1000);
+
+// What a network on the robot's GPU says is in the colour camera's picture (if one runs):
+// laid over that picture, one translucent square for each part the network speaks of, and
+// on the map from above, the squares it has seen things of a kind standing in.
+let labels = null;
+async function pollLabels() {
+  if (!info.labels || pollLabels.busy) return;
+  pollLabels.busy = true;
+  try {
+    const response = await fetch("/api/labels" + location.search);
+    if (!response.ok) return;
+    labels = await response.json();
+    const swatch = (kind) => `<span class="swatch" style="background:rgb(${(labels.colours[kind] || [128, 128, 128]).join(",")})"></span>`
+      + labels.names[kind].split("/")[0];
+    const figure = [...document.querySelectorAll("#cameras figure")]
+      .find((f) => f.querySelector("img") && f.querySelector("img").alt === labels.camera + " camera");
+    if (figure && labels.columns && labels.said.length === labels.columns * labels.rows) {
+      let canvas = figure.querySelector("canvas.labels"), note = figure.querySelector(".labels-note");
+      if (!canvas) {
+        canvas = document.createElement("canvas");
+        canvas.className = "labels";
+        note = document.createElement("div");
+        note.className = "muted labels-note";
+        figure.append(canvas, note);
+      }
+      canvas.width = labels.columns;
+      canvas.height = labels.rows;
+      const context = canvas.getContext("2d"), image = context.createImageData(labels.columns, labels.rows);
+      const area = new Map();
+      labels.said.forEach((kind, k) => {
+        image.data.set([...(labels.colours[kind] || [128, 128, 128]), labels.sure[k] >= 128 ? 255 : 90], k * 4);
+        area.set(kind, (area.get(kind) || 0) + 1);
+      });
+      context.putImageData(image, 0, 0);
+      const most = [...area.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4);
+      note.innerHTML = "The network sees:" + most.map(([kind, n]) =>
+        swatch(kind) + " " + Math.round(100 * n / labels.said.length) + " %").join("") + ` (${labels.ms} ms)`;
+    }
+    const kinds = [...new Set(labels.squares.map((square) => square[2]))].sort((a, b) => a - b);
+    $("plan-labels").style.display = kinds.length ? "" : "none";
+    $("plan-labels").innerHTML = "On the map, by what the network says they are:" + kinds.map(swatch).join("");
+    drawPlan();
+  } catch (e) { /* the next second will do */ } finally { pollLabels.busy = false; }
+}
+setInterval(pollLabels, 1000);
+new ResizeObserver(drawPlan).observe($("plan"));
+$("nav-look").addEventListener("click", () => send({ type: "nav", action: "look" }));
+$("nav-explore").addEventListener("click", () => {
+  armNav(false);
+  send({ type: "nav", action: "explore", radius: Math.max(1, Math.min(15, parseFloat($("nav-radius").value) || 4)) });
+});
+$("nav-stop").addEventListener("click", () => { armNav(false); send({ type: "nav", action: "cancel" }); });
+
+$("world-clear").addEventListener("click", () => send({ type: "world", action: "clear" }));
+$("world-level").addEventListener("click", () => send({ type: "world", action: "level" }));
+$("world-colour").addEventListener("click", () => {
+  const world = window.obotModel && window.obotModel.world;
+  if (!world) return;
+  world.colourByHeight(!world.byHeight);
+  $("world-colour").textContent = world.byHeight ? "Colour: height" : "Colour: camera";
+});
+
+// --- input: a real gamepad if there is one, otherwise the keyboard --------------------------
+const keys = new Set();
+const moveKeys = ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Space"];
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") send({ type: "request", request: "disable" });
+  keys.add(e.code);
+  if (moveKeys.includes(e.code)) e.preventDefault();
+});
+window.addEventListener("keyup", (e) => keys.delete(e.code));
+window.addEventListener("blur", () => keys.clear());   // a hidden page must not keep driving
+
+function keyboardPad() {
+  const axes = [0, 0, 0, 0];
+  const buttons = new Array(17).fill(0);
+  const shift = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  if (!shift) return null;
+  buttons[4] = 1;
+  axes[1] = (keys.has("KeyS") ? 1 : 0) - (keys.has("KeyW") ? 1 : 0);
+  axes[0] = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+  axes[3] = (keys.has("ArrowDown") ? 1 : 0) - (keys.has("ArrowUp") ? 1 : 0);
+  axes[2] = (keys.has("ArrowRight") ? 1 : 0) - (keys.has("ArrowLeft") ? 1 : 0);
+  return { axes, buttons };
+}
+
+function gamepad() {
+  for (const pad of navigator.getGamepads ? navigator.getGamepads() : []) {
+    if (pad && pad.connected && pad.mapping === "standard") return pad;
+  }
+  return null;
+}
+
+let sentNeutral = true;
+setInterval(() => {
+  const pad = document.hidden ? null : gamepad();
+  let state = null;
+  if (pad) {
+    state = { axes: Array.from(pad.axes).slice(0, 4), buttons: pad.buttons.map((b) => b.value) };
+    text("pad", pad.id);
+  } else {
+    state = document.hidden ? null : keyboardPad();
+    text("pad", state ? "Keyboard" : "No controller. Connect one and press any button, or use the keyboard.");
+  }
+  // Send while there is input, and one neutral message when it ends.
+  if (state) { send({ type: "gamepad", ...state }); sentNeutral = false; }
+  else if (!sentNeutral) { send({ type: "gamepad", axes: [0, 0, 0, 0], buttons: [] }); sentNeutral = true; }
+}, 25);
+
+import("/static/plots.js").then((m) => {
+  window.obotPlots = m.createPlots($("plots"), send);
+  if (info.plot_signals) window.obotPlots.setCatalogue(info.plot_signals, info.plot_rates || []);
+}).catch((e) => { $("plots").textContent = "Plots unavailable: " + e; });
+
+connect();
+</script>
+</body>
+</html>

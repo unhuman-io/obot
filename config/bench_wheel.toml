@@ -1,0 +1,37 @@
+# One wheel board on the bench, on USB: the smallest configuration that talks to real
+# hardware. Used to check the usb_rt transport and the obot driver against a real board
+# (`obot-rtd --config bench_wheel.toml --shm-name obot_bench`, next to a robot's own
+# daemon if there is one).
+
+[robot]
+name = "bench_wheel"
+shm_name = "obot_bench"
+period_us = 1000
+comm_timeout_cycles = 20
+
+[[bus]]
+name = "usb"
+interface = "usbrt"
+
+# Signs: every joint has direction 1 (the default, so the key is not written). Which way is
+# positive is settled in each motor controller's firmware (phase order and encoder
+# direction), so that the host never has to know how a motor is mounted: a positive wheel
+# velocity drives the robot forward on both sides.
+#
+# wrap: the wheel firmware keeps its position within plus or minus its encoder rollover (one
+# revolution here) and jumps by twice that, two revolutions, at either end. The daemon
+# counts the turns up again. The value is that jump: 2 * the firmware's `mrollover`.
+
+[[joint]]
+name = "left_wheel_joint"
+bus = "usb"
+usb_name = "wl"
+id = 1
+gear_ratio = 1.0
+torque_constant = 0.5         # N m / A, VERIFY
+continuous = true
+wrap = 12.5663706             # rad: the firmware position runs over +-1 revolution
+qd_max = 8.0
+qdd_max = 15.0
+tau_max = 8.0
+kd = 2.0

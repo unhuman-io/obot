@@ -1,0 +1,3 @@
+[submodule "rt/third_party/motor-realtime"]
+	path = rt/third_party/motor-realtime
+	url = ../motor-realtime

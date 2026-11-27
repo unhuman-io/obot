@@ -1,0 +1,31 @@
+name: Deployment test
+# Deploys this commit to a spare robot computer on simulated actuators and runs the
+# checks in deploy/verify.sh on it. The target is on a private network, so this needs a
+# self-hosted runner there (label: obot-lab) whose user has an ssh key on the target.
+# Repository variables: DEPLOY_TEST_TARGET (user@host), DEPLOY_TEST_JUMP (optional ssh jump host).
+on:
+  workflow_dispatch:
+    inputs:
+      config:
+        description: robot configuration to deploy
+        default: config/obot1.toml
+      cpu:
+        description: CPU for the control thread
+        default: "3"
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, obot-lab]
+    timeout-minutes: 30
+    concurrency: deploy-test-target     # one deployment to the board at a time
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Deploy and verify
+        env:
+          TARGET: ${{ vars.DEPLOY_TEST_TARGET }}
+          JUMP: ${{ vars.DEPLOY_TEST_JUMP }}
+        run: |
+          deploy/deploy.sh ${JUMP:+--jump "$JUMP"} --cpu "${{ inputs.cpu }}" --isolate --reboot --sim \
+            --force-config "$TARGET" "${{ inputs.config }}"

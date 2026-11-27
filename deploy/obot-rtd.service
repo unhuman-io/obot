@@ -1,0 +1,24 @@
+[Unit]
+Description=obot realtime actuator daemon
+Documentation=https://github.com/unhuman-io/obot
+After=network.target
+
+[Service]
+Type=simple
+User=obot
+Group=obot
+# Clients attach to /dev/shm/obot as members of group obot.
+UMask=0007
+EnvironmentFile=-/etc/default/obot-rtd
+ExecStart=/usr/local/bin/obot-rtd --config /etc/obot/robot.toml --cpu ${OBOT_RT_CPU} $OBOT_RTD_ARGS
+Restart=on-failure
+RestartSec=1
+# Realtime scheduling and locked memory without running as root.
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_SYS_NICE CAP_IPC_LOCK
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
